@@ -1,9 +1,11 @@
 <p align="center">
-  <h1 align="center">⚡ zipet</h1>
-  <p align="center"><strong>Snippets that grow with you</strong></p>
-  <p align="center">
-    A blazing-fast command snippet manager with TUI, workflows, packs, and fuzzy search — written in Zig.
-  </p>
+  <img src="assets/logo.svg" alt="zipet logo" width="180" />
+</p>
+
+<h1 align="center">⚡ zipet</h1>
+<p align="center"><strong>Snippets that grow with you</strong></p>
+<p align="center">
+  A blazing-fast command snippet manager with TUI, workflows, packs, and fuzzy search — written in Zig.
 </p>
 
 <p align="center">

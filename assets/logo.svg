@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="95" fill="#1a1a2e" stroke="#00d4ff" stroke-width="3"/>
+  
+  <!-- Head -->
+  <ellipse cx="100" cy="95" rx="45" ry="42" fill="#8B6914"/>
+  
+  <!-- Lighter muzzle area -->
+  <ellipse cx="100" cy="112" rx="28" ry="22" fill="#A67B1E"/>
+  
+  <!-- Left ear -->
+  <ellipse cx="60" cy="75" rx="18" ry="30" fill="#6B4F10" transform="rotate(-15, 60, 75)"/>
+  
+  <!-- Right ear -->
+  <ellipse cx="140" cy="75" rx="18" ry="30" fill="#6B4F10" transform="rotate(15, 140, 75)"/>
+  
+  <!-- Left eye -->
+  <ellipse cx="82" cy="88" rx="8" ry="8.5" fill="#2C1A00"/>
+  <ellipse cx="84" cy="86" rx="3" ry="3" fill="#FFFFFF" opacity="0.7"/>
+  
+  <!-- Right eye -->
+  <ellipse cx="118" cy="88" rx="8" ry="8.5" fill="#2C1A00"/>
+  <ellipse cx="120" cy="86" rx="3" ry="3" fill="#FFFFFF" opacity="0.7"/>
+  
+  <!-- Nose -->
+  <ellipse cx="100" cy="105" rx="10" ry="7" fill="#2C1A00"/>
+  <ellipse cx="98" cy="103" rx="3" ry="2" fill="#FFFFFF" opacity="0.2"/>
+  
+  <!-- Mouth -->
+  <path d="M 100 112 Q 92 120 88 118" stroke="#2C1A00" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M 100 112 Q 108 120 112 118" stroke="#2C1A00" stroke-width="2" fill="none" stroke-linecap="round"/>
+  
+  <!-- Tongue -->
+  <ellipse cx="100" cy="122" rx="6" ry="8" fill="#E8707A"/>
+  <line x1="100" y1="116" x2="100" y2="128" stroke="#D4606A" stroke-width="1"/>
+  
+  <!-- Lightning bolt (zipet branding) on forehead -->
+  <polygon points="105,62 98,78 104,78 97,92 110,74 103,74" fill="#00d4ff" opacity="0.9"/>
+  
+  <!-- Text arc at bottom -->
+  <text x="100" y="165" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="22" fill="#00d4ff" letter-spacing="3">zipet</text>
+</svg>
