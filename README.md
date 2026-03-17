@@ -289,6 +289,71 @@ zipet shell fish | source
 
 ---
 
+### 🤖 AI Agent Integration (MCP)
+
+zipet includes a **Model Context Protocol (MCP) server** so AI coding agents (Claude, Copilot, Cursor, etc.) can search, preview, and execute your snippets securely.
+
+```
+┌──────────────────────┐
+│   AI Coding Agent    │  "I need to clean up Docker"
+└──────────┬───────────┘
+           │ MCP Protocol (stdio/SSE)
+           ▼
+┌──────────────────────┐
+│  zipet-mcp-server    │  search → preview → run (with safety gate)
+└──────────┬───────────┘
+           │ subprocess
+           ▼
+┌──────────────────────┐
+│     zipet CLI        │  ~/.config/zipet/
+└──────────────────────┘
+```
+
+**Available MCP tools:**
+
+| Tool | Description |
+|------|-------------|
+| `zipet_search` | Fuzzy search snippets and workflows |
+| `zipet_list` | List by category or tags |
+| `zipet_get` | Get full snippet details |
+| `zipet_run` | Execute a snippet (with safety gate) |
+| `zipet_run_workflow` | Execute a full workflow |
+| `zipet_preview` | Preview expanded command without executing |
+| `zipet_packs` | Browse and install packs |
+| `zipet_workspaces` | Manage workspaces |
+
+**MCP resources** — `zipet://snippets`, `zipet://workflows`, `zipet://packs`, `zipet://config`
+
+**Setup** — add to your agent's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "zipet": {
+      "command": "uv",
+      "args": ["run", "--project", "/path/to/zipet/ai", "python", "server.py"],
+      "env": {
+        "ZIPET_SAFETY_MODE": "confirm",
+        "ZIPET_DENY_COMMANDS": "rm -rf /,mkfs,dd if="
+      }
+    }
+  }
+}
+```
+
+**Safety modes:**
+
+| Mode | Description |
+|------|-------------|
+| `open` | Execute without confirmation (dev/sandbox only) |
+| `confirm` | Requires human approval before executing |
+| `dry-run` | Preview only, never executes |
+| `allowlist` | Only runs snippets/tags in the allowlist |
+
+> See [`ai/README.md`](ai/README.md) for full MCP server documentation.
+
+---
+
 ### 📤 Import & Export
 
 ```bash
@@ -386,6 +451,7 @@ editor = "vim"           # Editor for 'edit' command
 | `zipet shell <bash\|zsh\|fish>` | Output shell integration |
 | `zipet help` | Show help |
 | `zipet version` | Show version |
+| MCP server | `uv run --project ai python server.py` — AI agent interface |
 
 ---
 
