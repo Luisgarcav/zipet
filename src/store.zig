@@ -4,6 +4,7 @@ const toml = @import("toml.zig");
 const config = @import("config.zig");
 const template = @import("template.zig");
 const fuzzy = @import("fuzzy.zig");
+const workflow_mod = @import("workflow.zig");
 
 pub const Snippet = struct {
     name: []const u8,
@@ -95,28 +96,57 @@ pub const Store = struct {
     }
 
     pub fn loadAll(self: *Store) !void {
+        // Load snippets
         const snippets_dir = try self.cfg.getSnippetsDir(self.allocator);
         defer self.allocator.free(snippets_dir);
 
-        var dir = std.fs.openDirAbsolute(snippets_dir, .{ .iterate = true }) catch return;
-        defer dir.close();
+        if (std.fs.openDirAbsolute(snippets_dir, .{ .iterate = true })) |*dir_ptr| {
+            var dir = dir_ptr.*;
+            defer dir.close();
 
-        var iter = dir.iterate();
-        while (try iter.next()) |entry| {
-            if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.name, ".toml")) continue;
+            var iter = dir.iterate();
+            while (try iter.next()) |entry| {
+                if (entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, entry.name, ".toml")) continue;
 
-            const namespace = try self.allocator.dupe(u8, entry.name[0 .. entry.name.len - 5]);
-            defer self.allocator.free(namespace);
+                const namespace = try self.allocator.dupe(u8, entry.name[0 .. entry.name.len - 5]);
+                defer self.allocator.free(namespace);
 
-            const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ snippets_dir, entry.name });
-            defer self.allocator.free(path);
+                const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ snippets_dir, entry.name });
+                defer self.allocator.free(path);
 
-            self.loadFile(path, namespace) catch |err| {
-                std.debug.print("Warning: could not load {s}: {}\n", .{ entry.name, err });
-                continue;
-            };
-        }
+                self.loadFile(path, namespace) catch |err| {
+                    std.debug.print("Warning: could not load {s}: {}\n", .{ entry.name, err });
+                    continue;
+                };
+            }
+        } else |_| {}
+
+        // Load workflows
+        const workflows_dir = try self.cfg.getWorkflowsDir(self.allocator);
+        defer self.allocator.free(workflows_dir);
+
+        if (std.fs.openDirAbsolute(workflows_dir, .{ .iterate = true })) |*dir_ptr| {
+            var dir = dir_ptr.*;
+            defer dir.close();
+
+            var iter = dir.iterate();
+            while (try iter.next()) |entry| {
+                if (entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, entry.name, ".toml")) continue;
+
+                const namespace = try self.allocator.dupe(u8, entry.name[0 .. entry.name.len - 5]);
+                defer self.allocator.free(namespace);
+
+                const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ workflows_dir, entry.name });
+                defer self.allocator.free(path);
+
+                workflow_mod.loadWorkflowFile(self.allocator, path, namespace, self) catch |err| {
+                    std.debug.print("Warning: could not load workflow {s}: {}\n", .{ entry.name, err });
+                    continue;
+                };
+            }
+        } else |_| {}
     }
 
     fn loadFile(self: *Store, path: []const u8, namespace: []const u8) !void {

@@ -4,6 +4,7 @@ const store = @import("store.zig");
 const config = @import("config.zig");
 const executor = @import("executor.zig");
 const template = @import("template.zig");
+const workflow = @import("workflow.zig");
 
 fn writeOut(data: []const u8) void {
     std.fs.File.stdout().writeAll(data) catch {};
@@ -50,6 +51,8 @@ pub fn dispatch(allocator: std.mem.Allocator, args: []const []const u8, snip_sto
         try cmdTags(allocator, snip_store);
     } else if (std.mem.eql(u8, cmd, "edit")) {
         try cmdEdit(allocator, args[1..], snip_store, cfg);
+    } else if (std.mem.eql(u8, cmd, "workflow") or std.mem.eql(u8, cmd, "wf")) {
+        try cmdWorkflow(allocator, args[1..], snip_store, cfg);
     } else if (std.mem.eql(u8, cmd, "init")) {
         try cmdInit(allocator, cfg);
     } else if (std.mem.eql(u8, cmd, "shell")) {
@@ -523,6 +526,352 @@ fn cmdExport(snip_store: *store.Store) !void {
     }
 }
 
+fn cmdWorkflow(allocator: std.mem.Allocator, args: []const []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    if (args.len == 0) {
+        writeOut("Usage: zipet workflow <subcommand>\n\n");
+        writeOut("Subcommands:\n");
+        writeOut("  add              Create a new workflow interactively\n");
+        writeOut("  run <name>       Run a workflow by name\n");
+        writeOut("  ls               List all workflows\n");
+        writeOut("  show <name>      Show workflow details\n");
+        writeOut("  rm <name>        Delete a workflow\n");
+        writeOut("  edit <name>      Edit workflow in $EDITOR\n");
+        return;
+    }
+
+    const sub = args[0];
+    if (std.mem.eql(u8, sub, "add")) {
+        try cmdWorkflowAdd(allocator, snip_store, cfg);
+    } else if (std.mem.eql(u8, sub, "run")) {
+        if (args.len < 2) {
+            writeOut("Usage: zipet workflow run <name>\n");
+            return;
+        }
+        try cmdWorkflowRun(allocator, args[1], snip_store, cfg);
+    } else if (std.mem.eql(u8, sub, "ls")) {
+        cmdWorkflowList(allocator, snip_store);
+    } else if (std.mem.eql(u8, sub, "show")) {
+        if (args.len < 2) {
+            writeOut("Usage: zipet workflow show <name>\n");
+            return;
+        }
+        cmdWorkflowShow(allocator, args[1], snip_store);
+    } else if (std.mem.eql(u8, sub, "rm")) {
+        if (args.len < 2) {
+            writeOut("Usage: zipet workflow rm <name>\n");
+            return;
+        }
+        try cmdWorkflowRemove(args[1], snip_store);
+    } else if (std.mem.eql(u8, sub, "edit")) {
+        if (args.len < 2) {
+            writeOut("Usage: zipet workflow edit <name>\n");
+            return;
+        }
+        try cmdWorkflowEdit(allocator, args[1], snip_store, cfg);
+    } else {
+        printOut(allocator, "Unknown workflow subcommand: {s}\n", .{sub});
+    }
+}
+
+fn cmdWorkflowAdd(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.Config) !void {
+    writeOut("\x1b[1;36m━━━ Create Workflow ━━━\x1b[0m\n\n");
+
+    writeOut("Workflow name: ");
+    var name_buf: [256]u8 = undefined;
+    const name = readLine(&name_buf) orelse return;
+    if (name.len == 0) {
+        writeOut("Name required, aborting\n");
+        return;
+    }
+
+    writeOut("Description: ");
+    var desc_buf: [512]u8 = undefined;
+    const desc = readLine(&desc_buf) orelse return;
+
+    writeOut("Tags (comma-separated): ");
+    var tags_buf: [512]u8 = undefined;
+    const tags_str = readLine(&tags_buf) orelse return;
+
+    var tags: std.ArrayList([]const u8) = .{};
+    if (tags_str.len > 0) {
+        var iter = std.mem.splitScalar(u8, tags_str, ',');
+        while (iter.next()) |tag| {
+            const trimmed = std.mem.trim(u8, tag, " \t");
+            if (trimmed.len > 0) {
+                try tags.append(allocator, try allocator.dupe(u8, trimmed));
+            }
+        }
+    }
+
+    writeOut("Namespace [general]: ");
+    var ns_buf: [256]u8 = undefined;
+    const ns_input = readLine(&ns_buf) orelse return;
+    const namespace = if (ns_input.len > 0) ns_input else "general";
+
+    // List available snippets for reference
+    writeOut("\n\x1b[2mAvailable snippets:\x1b[0m\n");
+    for (snip_store.snippets.items) |snip| {
+        if (snip.kind == .snippet) {
+            printOut(allocator, "  • {s} — {s}\n", .{ snip.name, snip.desc });
+        }
+    }
+    writeOut("\n");
+
+    // Collect steps
+    var steps: std.ArrayList(workflow.Step) = .{};
+    var step_num: usize = 1;
+
+    while (true) {
+        printOut(allocator, "\x1b[1mStep {d}\x1b[0m (empty name to finish):\n", .{step_num});
+
+        writeOut("  Step name: ");
+        var sname_buf: [256]u8 = undefined;
+        const sname = readLine(&sname_buf) orelse break;
+        if (sname.len == 0) break;
+
+        writeOut("  Type (cmd/snippet) [cmd]: ");
+        var type_buf: [64]u8 = undefined;
+        const step_type = readLine(&type_buf) orelse break;
+
+        var step_cmd: ?[]const u8 = null;
+        var step_snippet: ?[]const u8 = null;
+
+        if (std.mem.eql(u8, step_type, "snippet") or std.mem.eql(u8, step_type, "s")) {
+            writeOut("  Snippet name: ");
+            var ref_buf: [256]u8 = undefined;
+            const ref = readLine(&ref_buf) orelse break;
+            if (ref.len == 0) {
+                writeOut("  Snippet name required, skipping step\n");
+                continue;
+            }
+            step_snippet = try allocator.dupe(u8, ref);
+        } else {
+            writeOut("  Command: ");
+            var cmd_buf: [2048]u8 = undefined;
+            const cmd = readLine(&cmd_buf) orelse break;
+            if (cmd.len == 0) {
+                writeOut("  Command required, skipping step\n");
+                continue;
+            }
+            step_cmd = try allocator.dupe(u8, cmd);
+        }
+
+        writeOut("  On failure (stop/continue/skip_rest) [stop]: ");
+        var fail_buf: [64]u8 = undefined;
+        const fail_input = readLine(&fail_buf) orelse break;
+        const on_fail = if (fail_input.len > 0) workflow.OnFail.fromString(fail_input) else .stop;
+
+        try steps.append(allocator, .{
+            .name = try allocator.dupe(u8, sname),
+            .cmd = step_cmd,
+            .snippet_ref = step_snippet,
+            .on_fail = on_fail,
+            .param_overrides = &.{},
+        });
+
+        step_num += 1;
+        writeOut("\n");
+    }
+
+    if (steps.items.len == 0) {
+        writeOut("No steps added, aborting\n");
+        return;
+    }
+
+    // Detect params from all steps
+    var params_list: std.ArrayList(template.Param) = .{};
+    for (steps.items) |step| {
+        if (step.cmd) |cmd| {
+            const detected = try template.detectParams(allocator, cmd);
+            defer allocator.free(detected);
+            for (detected) |pname| {
+                if (std.mem.eql(u8, pname, "prev_stdout") or std.mem.eql(u8, pname, "prev_exit")) {
+                    allocator.free(pname);
+                    continue;
+                }
+                var found = false;
+                for (params_list.items) |existing| {
+                    if (std.mem.eql(u8, existing.name, pname)) {
+                        found = true;
+                        allocator.free(pname);
+                        break;
+                    }
+                }
+                if (!found) {
+                    try params_list.append(allocator, .{
+                        .name = pname,
+                        .prompt = null,
+                        .default = null,
+                        .options = null,
+                        .command = null,
+                    });
+                }
+            }
+        }
+    }
+
+    // Ask for param defaults
+    if (params_list.items.len > 0) {
+        printOut(allocator, "\nDetected {d} parameter(s):\n", .{params_list.items.len});
+        for (params_list.items, 0..) |*p, i| {
+            _ = i;
+            printOut(allocator, "  Default for '{s}' (empty to skip): ", .{p.name});
+            var def_buf: [512]u8 = undefined;
+            const def_input = readLine(&def_buf) orelse "";
+            if (def_input.len > 0) {
+                p.default = try allocator.dupe(u8, def_input);
+            }
+        }
+    }
+
+    const owned_steps = try steps.toOwnedSlice(allocator);
+    const owned_params = try params_list.toOwnedSlice(allocator);
+
+    // Build display command (step flow summary)
+    var cmd_buf: std.ArrayList(u8) = .{};
+    const cmd_writer = cmd_buf.writer(allocator);
+    for (owned_steps, 0..) |step, si| {
+        if (si > 0) try cmd_writer.writeAll(" → ");
+        if (step.snippet_ref) |ref| {
+            try cmd_writer.print("[{s}]", .{ref});
+        } else if (step.cmd) |cmd| {
+            const display = if (cmd.len > 40) cmd[0..40] else cmd;
+            try cmd_writer.writeAll(display);
+            if (cmd.len > 40) try cmd_writer.writeAll("...");
+        }
+    }
+
+    const wf = workflow.Workflow{
+        .name = try allocator.dupe(u8, name),
+        .desc = try allocator.dupe(u8, desc),
+        .tags = try tags.toOwnedSlice(allocator),
+        .steps = owned_steps,
+        .params = owned_params,
+        .namespace = try allocator.dupe(u8, namespace),
+    };
+
+    // Save to file
+    try workflow.saveWorkflow(allocator, &wf, cfg);
+
+    // Register in memory
+    try workflow.registerWorkflow(allocator, wf);
+
+    // Add to store as a snippet entry
+    try snip_store.snippets.append(allocator, .{
+        .name = try allocator.dupe(u8, name),
+        .desc = try allocator.dupe(u8, desc),
+        .cmd = try cmd_buf.toOwnedSlice(allocator),
+        .tags = wf.tags,
+        .params = wf.params,
+        .namespace = try allocator.dupe(u8, namespace),
+        .kind = .workflow,
+    });
+
+    printOut(allocator, "\n\x1b[32m✓ Workflow '{s}' saved with {d} steps\x1b[0m\n", .{ name, owned_steps.len });
+}
+
+fn cmdWorkflowRun(allocator: std.mem.Allocator, name: []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    if (workflow.getWorkflow(allocator, name)) |wf| {
+        const result = try workflow.execute(allocator, wf, snip_store, cfg);
+        defer result.deinit();
+    } else {
+        printOut(allocator, "Workflow '{s}' not found\n", .{name});
+    }
+}
+
+fn cmdWorkflowList(allocator: std.mem.Allocator, snip_store: *store.Store) void {
+    var count: usize = 0;
+    for (snip_store.snippets.items) |snip| {
+        if (snip.kind == .workflow) {
+            printOut(allocator, "  \x1b[1;36m⚡ {s}\x1b[0m", .{snip.name});
+
+            const name_len = snip.name.len;
+            var pad = if (name_len < 24) 24 - name_len else @as(usize, 1);
+            while (pad > 0) : (pad -= 1) writeOut(" ");
+
+            printOut(allocator, "{s}\n", .{snip.desc});
+            printOut(allocator, "    \x1b[2m{s}\x1b[0m\n", .{snip.cmd});
+            count += 1;
+        }
+    }
+    if (count == 0) {
+        writeOut("No workflows yet. Create one with: zipet workflow add\n");
+    } else {
+        printOut(allocator, "\n{d} workflow(s)\n", .{count});
+    }
+}
+
+fn cmdWorkflowShow(allocator: std.mem.Allocator, name: []const u8, snip_store: *store.Store) void {
+    _ = snip_store;
+    if (workflow.getWorkflow(allocator, name)) |wf| {
+        printOut(allocator, "\x1b[1;36m⚡ {s}\x1b[0m\n", .{wf.name});
+        printOut(allocator, "   {s}\n\n", .{wf.desc});
+        printOut(allocator, "Steps ({d}):\n", .{wf.steps.len});
+
+        for (wf.steps, 0..) |step, i| {
+            printOut(allocator, "  {d}. \x1b[1m{s}\x1b[0m\n", .{ i + 1, step.name });
+            if (step.cmd) |cmd| {
+                printOut(allocator, "     \x1b[2m$ {s}\x1b[0m\n", .{cmd});
+            }
+            if (step.snippet_ref) |ref| {
+                printOut(allocator, "     \x1b[2m→ snippet: {s}\x1b[0m\n", .{ref});
+            }
+            const on_fail_str: []const u8 = switch (step.on_fail) {
+                .stop => "stop",
+                .@"continue" => "continue",
+                .skip_rest => "skip_rest",
+            };
+            printOut(allocator, "     on_fail: {s}\n", .{on_fail_str});
+        }
+
+        if (wf.params.len > 0) {
+            printOut(allocator, "\nParameters ({d}):\n", .{wf.params.len});
+            for (wf.params) |p| {
+                printOut(allocator, "  • {s}", .{p.name});
+                if (p.default) |d| printOut(allocator, " (default: {s})", .{d});
+                writeOut("\n");
+            }
+        }
+    } else {
+        printOut(allocator, "Workflow '{s}' not found\n", .{name});
+    }
+}
+
+fn cmdWorkflowRemove(name: []const u8, snip_store: *store.Store) !void {
+    for (snip_store.snippets.items, 0..) |snip, i| {
+        if (snip.kind == .workflow and std.mem.eql(u8, snip.name, name)) {
+            snip_store.freeSnippet(snip);
+            _ = snip_store.snippets.orderedRemove(i);
+            writeOut("✓ Removed workflow '");
+            writeOut(name);
+            writeOut("'\n");
+            return;
+        }
+    }
+    writeOut("Workflow '");
+    writeOut(name);
+    writeOut("' not found\n");
+}
+
+fn cmdWorkflowEdit(allocator: std.mem.Allocator, name: []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    for (snip_store.snippets.items) |snip| {
+        if (snip.kind == .workflow and std.mem.eql(u8, snip.name, name)) {
+            const workflows_dir = try cfg.getWorkflowsDir(allocator);
+            defer allocator.free(workflows_dir);
+
+            const path = try std.fmt.allocPrint(allocator, "{s}/{s}.toml", .{ workflows_dir, snip.namespace });
+            defer allocator.free(path);
+
+            var child = std.process.Child.init(&.{ cfg.editor, path }, allocator);
+            _ = try child.spawnAndWait();
+            return;
+        }
+    }
+    writeOut("Workflow '");
+    writeOut(name);
+    writeOut("' not found\n");
+}
+
 fn printHelp() void {
     writeOut(
         \\zipet — snippets that grow with you
@@ -538,6 +887,11 @@ fn printHelp() void {
         \\  rm <name>      Delete snippet
         \\  ls [--tags=x]  List snippets, optionally filtered by tag
         \\  tags           List all tags
+        \\  workflow add   Create a workflow (chain of snippets/commands)
+        \\  workflow run   Run a workflow
+        \\  workflow ls    List workflows
+        \\  workflow show  Show workflow details
+        \\  wf             Alias for workflow
         \\  init           Initialize config directory
         \\  shell <sh>     Output shell integration (bash/zsh/fish)
         \\  export         Export all snippets as TOML

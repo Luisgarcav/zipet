@@ -5,6 +5,7 @@ const store = @import("store.zig");
 const config = @import("config.zig");
 const executor = @import("executor.zig");
 const template = @import("template.zig");
+const workflow_mod = @import("workflow.zig");
 
 const ESC = "\x1b";
 const CSI = ESC ++ "[";
@@ -227,22 +228,37 @@ fn renderScreen(alloc: std.mem.Allocator, w: *ScreenBuf, state: *State, snip_sto
             const snip = &snip_store.snippets.items[snip_idx];
             const is_selected = idx == state.cursor;
 
+            // Kind icon: ⚡ workflow, $ snippet
+            const kind_icon: []const u8 = switch (snip.kind) {
+                .workflow => "⚡",
+                .snippet => " $",
+                .chain => "🔗",
+            };
+            const kind_color: []const u8 = switch (snip.kind) {
+                .workflow => "\x1b[1;33m", // yellow bold
+                .snippet => "\x1b[2m", // dim
+                .chain => "\x1b[1;35m", // magenta bold
+            };
+
             if (is_selected) {
                 try w.print(alloc, " {s}▸{s} ", .{ accent_bold, RESET });
+                try w.print(alloc, "{s}{s}{s} ", .{ kind_color, kind_icon, RESET });
                 try w.print(alloc, "{s}{s}{s}", .{ accent_bold, snip.name, RESET });
             } else {
                 try w.writeAll(alloc, "   ");
+                try w.print(alloc, "{s}{s}{s} ", .{ kind_color, kind_icon, RESET });
                 try w.print(alloc, "{s}{s}{s}", .{ BOLD, snip.name, RESET });
             }
 
-            const name_len = snip.name.len;
-            if (name_len < 24) {
-                try w.writeByteNTimes(alloc, ' ', 24 - name_len);
+            // +3 for icon + space (icon takes ~2 cols visually)
+            const name_col = snip.name.len + 3;
+            if (name_col < 27) {
+                try w.writeByteNTimes(alloc, ' ', 27 - name_col);
             } else {
                 try w.writeAll(alloc, " ");
             }
 
-            const desc_max = if (cols > 40) cols - 40 else 10;
+            const desc_max = if (cols > 44) cols - 44 else 10;
             if (snip.desc.len > desc_max) {
                 try w.print(alloc, "{s}", .{DIM});
                 try w.writeAll(alloc, snip.desc[0..desc_max -| 3]);
@@ -273,22 +289,54 @@ fn renderScreen(alloc: std.mem.Allocator, w: *ScreenBuf, state: *State, snip_sto
             const snip_idx = state.filtered_indices[state.cursor];
             const snip = &snip_store.snippets.items[snip_idx];
 
-            try w.writeAll(alloc, CLEAR_LINE);
-            try w.print(alloc, " {s}$ {s}{s}\n", .{ accent, snip.cmd, RESET });
-
-            try w.writeAll(alloc, CLEAR_LINE);
-            if (snip.params.len > 0) {
-                try w.print(alloc, " {s}params: ", .{DIM});
-                for (snip.params, 0..) |p, pi| {
-                    if (pi > 0) try w.writeAll(alloc, ", ");
-                    try w.writeAll(alloc, p.name);
-                    if (p.default) |d| {
-                        try w.print(alloc, " (default: {s})", .{d});
+            if (snip.kind == .workflow) {
+                // Workflow preview: show step flow
+                try w.writeAll(alloc, CLEAR_LINE);
+                try w.print(alloc, " \x1b[1;33m⚡ workflow\x1b[0m {s}", .{DIM});
+                // Parse step flow from the cmd field (which contains step1 → step2 → ...)
+                if (snip.cmd.len > 0) {
+                    const cmd_max = if (cols > 20) cols - 20 else 10;
+                    if (snip.cmd.len > cmd_max) {
+                        try w.writeAll(alloc, snip.cmd[0..cmd_max -| 3]);
+                        try w.writeAll(alloc, "...");
+                    } else {
+                        try w.writeAll(alloc, snip.cmd);
                     }
                 }
-                try w.print(alloc, "{s}", .{RESET});
+                try w.print(alloc, "{s}\n", .{RESET});
+
+                try w.writeAll(alloc, CLEAR_LINE);
+                if (snip.params.len > 0) {
+                    try w.print(alloc, " {s}params: ", .{DIM});
+                    for (snip.params, 0..) |p, pi| {
+                        if (pi > 0) try w.writeAll(alloc, ", ");
+                        try w.writeAll(alloc, p.name);
+                        if (p.default) |d| {
+                            try w.print(alloc, "={s}", .{d});
+                        }
+                    }
+                    try w.print(alloc, "{s}", .{RESET});
+                }
+                try w.writeAll(alloc, "\n");
+            } else {
+                // Snippet preview: show command
+                try w.writeAll(alloc, CLEAR_LINE);
+                try w.print(alloc, " {s}$ {s}{s}\n", .{ accent, snip.cmd, RESET });
+
+                try w.writeAll(alloc, CLEAR_LINE);
+                if (snip.params.len > 0) {
+                    try w.print(alloc, " {s}params: ", .{DIM});
+                    for (snip.params, 0..) |p, pi| {
+                        if (pi > 0) try w.writeAll(alloc, ", ");
+                        try w.writeAll(alloc, p.name);
+                        if (p.default) |d| {
+                            try w.print(alloc, " (default: {s})", .{d});
+                        }
+                    }
+                    try w.print(alloc, "{s}", .{RESET});
+                }
+                try w.writeAll(alloc, "\n");
             }
-            try w.writeAll(alloc, "\n");
         } else {
             try w.writeAll(alloc, CLEAR_LINE ++ "\n");
             try w.writeAll(alloc, CLEAR_LINE ++ "\n");
@@ -297,7 +345,9 @@ fn renderScreen(alloc: std.mem.Allocator, w: *ScreenBuf, state: *State, snip_sto
 
     // ── Keybinding bar ──
     try w.writeAll(alloc, CLEAR_LINE ++ DIM);
-    if (state.mode == .help) {
+    if (state.mode == .confirm_delete) {
+        try w.writeAll(alloc, " \x1b[1;31mDelete this snippet? (y/N)\x1b[0m" ++ DIM);
+    } else if (state.mode == .help) {
         try w.writeAll(alloc, CLEAR_LINE);
         try w.writeAll(alloc, " j/k move  gg/G first/last  Ctrl-D/U page  / search  Enter run");
         try w.writeAll(alloc, "\n" ++ CLEAR_LINE);
@@ -315,7 +365,7 @@ fn handleInput(allocator: std.mem.Allocator, input: []const u8, state: *State, s
     switch (state.mode) {
         .search => try handleSearchInput(allocator, input, state, snip_store),
         .command => try handleCommandInput(input, state),
-        .confirm_delete => try handleConfirmDelete(input, state, snip_store),
+        .confirm_delete => try handleConfirmDelete(allocator, input, state, snip_store),
         .normal => try handleNormalInput(allocator, input, state, snip_store, cfg, tty, orig_termios),
         .help => {
             if (input[0] == '?' or input[0] == 27) {
@@ -385,8 +435,8 @@ fn handleNormalInput(allocator: std.mem.Allocator, input: []const u8, state: *St
                 tty.writeAll(ALT_SCREEN_OFF ++ SHOW_CURSOR) catch {};
                 std.posix.tcsetattr(tty.handle, .FLUSH, orig_termios) catch {};
 
-                // Interactive add flow
                 const stdout = std.fs.File.stdout();
+                stdout.writeAll("\n") catch {};
                 stdout.writeAll("Command: ") catch {};
                 var cmd_buf: [2048]u8 = undefined;
                 const cmd_input = readLine(&cmd_buf);
@@ -547,70 +597,96 @@ fn handleNormalInput(allocator: std.mem.Allocator, input: []const u8, state: *St
             },
             '\r', '\n' => {
                 if (total > 0 and state.cursor < total) {
-                    // Exit TUI, execute the snippet
-                    tty.writeAll(ALT_SCREEN_OFF ++ SHOW_CURSOR) catch {};
-
                     const snip_idx = state.filtered_indices[state.cursor];
                     const snip = &snip_store.snippets.items[snip_idx];
 
-                    const pout = std.fmt.allocPrint(allocator, "\x1b[1m{s}\x1b[0m — {s}\n\x1b[2m$ {s}\x1b[0m\n\n", .{ snip.name, snip.desc, snip.cmd }) catch null;
-                    if (pout) |p| {
-                        std.fs.File.stdout().writeAll(p) catch {};
-                        allocator.free(p);
-                    }
+                    // Exit TUI: leave alt screen, restore terminal
+                    tty.writeAll(ALT_SCREEN_OFF ++ SHOW_CURSOR) catch {};
+                    std.posix.tcsetattr(tty.handle, .FLUSH, orig_termios) catch {};
 
-                    if (snip.params.len > 0) {
-                        var param_keys = try allocator.alloc([]const u8, snip.params.len);
-                        defer allocator.free(param_keys);
-                        var param_values = try allocator.alloc([]const u8, snip.params.len);
-                        defer {
-                            for (param_values[0..snip.params.len]) |v| allocator.free(v);
-                            allocator.free(param_values);
-                        }
+                    const stdout = std.fs.File.stdout();
+                    // Move past old shell prompt with a newline
+                    stdout.writeAll("\n") catch {};
 
-                        for (snip.params, 0..) |p, pi| {
-                            param_keys[pi] = p.name;
-                            const prompt_text = p.prompt orelse p.name;
-                            if (p.default) |d| {
-                                const pr = std.fmt.allocPrint(allocator, "{s} [{s}]: ", .{ prompt_text, d }) catch null;
-                                if (pr) |pp| {
-                                    std.fs.File.stdout().writeAll(pp) catch {};
-                                    allocator.free(pp);
+                    if (snip.kind == .workflow) {
+                        // Execute workflow
+                        if (workflow_mod.getWorkflow(allocator, snip.name)) |wf| {
+                            const wf_result = workflow_mod.execute(allocator, wf, snip_store, cfg) catch |err| {
+                                const es = std.fmt.allocPrint(allocator, "\x1b[31mWorkflow error: {}\x1b[0m\n", .{err}) catch null;
+                                if (es) |e| {
+                                    stdout.writeAll(e) catch {};
+                                    allocator.free(e);
                                 }
-                            } else {
-                                const pr = std.fmt.allocPrint(allocator, "{s}: ", .{prompt_text}) catch null;
-                                if (pr) |pp| {
-                                    std.fs.File.stdout().writeAll(pp) catch {};
-                                    allocator.free(pp);
-                                }
-                            }
-
-                            var buf: [1024]u8 = undefined;
-                            const user_in = readLine(&buf);
-                            if (user_in) |inp| {
-                                if (inp.len == 0 and p.default != null) {
-                                    param_values[pi] = try allocator.dupe(u8, p.default.?);
-                                } else {
-                                    param_values[pi] = try allocator.dupe(u8, inp);
-                                }
-                            } else {
-                                param_values[pi] = try allocator.dupe(u8, p.default orelse "");
-                            }
+                                state.running = false;
+                                return;
+                            };
+                            defer wf_result.deinit();
+                        } else {
+                            stdout.writeAll("Workflow data not found in registry\n") catch {};
                         }
-
-                        const rendered = try template.render(allocator, snip.cmd, param_keys, param_values);
-                        defer allocator.free(rendered);
-
-                        const rp = std.fmt.allocPrint(allocator, "\n\x1b[2m$ {s}\x1b[0m\n\n", .{rendered}) catch null;
-                        if (rp) |r| {
-                            std.fs.File.stdout().writeAll(r) catch {};
-                            allocator.free(r);
-                        }
-                        _ = try executor.execForeground(rendered);
                     } else {
-                        _ = try executor.execForeground(snip.cmd);
+                        // Execute snippet
+                        const pout = std.fmt.allocPrint(allocator, "\x1b[1m{s}\x1b[0m — {s}\n\x1b[2m$ {s}\x1b[0m\n\n", .{ snip.name, snip.desc, snip.cmd }) catch null;
+                        if (pout) |p| {
+                            stdout.writeAll(p) catch {};
+                            allocator.free(p);
+                        }
+
+                        if (snip.params.len > 0) {
+                            var param_keys = try allocator.alloc([]const u8, snip.params.len);
+                            defer allocator.free(param_keys);
+                            var param_values = try allocator.alloc([]const u8, snip.params.len);
+                            defer {
+                                for (param_values[0..snip.params.len]) |v| allocator.free(v);
+                                allocator.free(param_values);
+                            }
+
+                            for (snip.params, 0..) |p, pi| {
+                                param_keys[pi] = p.name;
+                                const prompt_text = p.prompt orelse p.name;
+                                if (p.default) |d| {
+                                    const pr = std.fmt.allocPrint(allocator, "{s} [{s}]: ", .{ prompt_text, d }) catch null;
+                                    if (pr) |pp| {
+                                        stdout.writeAll(pp) catch {};
+                                        allocator.free(pp);
+                                    }
+                                } else {
+                                    const pr = std.fmt.allocPrint(allocator, "{s}: ", .{prompt_text}) catch null;
+                                    if (pr) |pp| {
+                                        stdout.writeAll(pp) catch {};
+                                        allocator.free(pp);
+                                    }
+                                }
+
+                                var buf: [1024]u8 = undefined;
+                                const user_in = readLine(&buf);
+                                if (user_in) |inp| {
+                                    if (inp.len == 0 and p.default != null) {
+                                        param_values[pi] = try allocator.dupe(u8, p.default.?);
+                                    } else {
+                                        param_values[pi] = try allocator.dupe(u8, inp);
+                                    }
+                                } else {
+                                    param_values[pi] = try allocator.dupe(u8, p.default orelse "");
+                                }
+                            }
+
+                            const rendered = try template.render(allocator, snip.cmd, param_keys, param_values);
+                            defer allocator.free(rendered);
+
+                            const rp = std.fmt.allocPrint(allocator, "\n\x1b[2m$ {s}\x1b[0m\n\n", .{rendered}) catch null;
+                            if (rp) |r| {
+                                stdout.writeAll(r) catch {};
+                                allocator.free(r);
+                            }
+                            _ = try executor.execForeground(rendered);
+                        } else {
+                            _ = try executor.execForeground(snip.cmd);
+                        }
                     }
 
+                    // Ensure a final newline so shell prompt appears below output
+                    stdout.writeAll("\n") catch {};
                     state.running = false;
                 }
                 state.pending_g = false;
@@ -729,7 +805,7 @@ fn handleCommandInput(input: []const u8, state: *State) !void {
     }
 }
 
-fn handleConfirmDelete(input: []const u8, state: *State, snip_store: *store.Store) !void {
+fn handleConfirmDelete(allocator: std.mem.Allocator, input: []const u8, state: *State, snip_store: *store.Store) !void {
     if (input.len == 1) {
         switch (input[0]) {
             'y', 'Y' => {
@@ -738,8 +814,21 @@ fn handleConfirmDelete(input: []const u8, state: *State, snip_store: *store.Stor
                     const snip_idx = state.filtered_indices[state.cursor];
                     const name = snip_store.snippets.items[snip_idx].name;
                     snip_store.remove(name) catch {};
+
+                    // Rebuild filter after deletion
+                    allocator.free(state.filtered_indices);
+                    state.filtered_indices = updateFilter(allocator, snip_store, state.searchQuery()) catch &.{};
+
+                    // Adjust cursor
+                    if (state.filtered_indices.len == 0) {
+                        state.cursor = 0;
+                        state.scroll_offset = 0;
+                    } else if (state.cursor >= state.filtered_indices.len) {
+                        state.cursor = state.filtered_indices.len - 1;
+                    }
+                    adjustScroll(state);
+
                     state.message = "✓ Deleted";
-                    if (state.cursor > 0) state.cursor -= 1;
                 }
                 state.mode = .normal;
             },

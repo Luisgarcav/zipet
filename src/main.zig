@@ -3,6 +3,7 @@ const cli = @import("cli.zig");
 const tui = @import("tui.zig");
 const store = @import("store.zig");
 const config = @import("config.zig");
+const workflow = @import("workflow.zig");
 
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
@@ -21,6 +22,7 @@ pub fn main() !void {
         return err;
     };
     defer snip_store.deinit();
+    defer workflow.deinitRegistry(gpa);
 
     // Parse and dispatch CLI commands
     if (args.len <= 1) {
@@ -37,4 +39,5 @@ test {
     _ = @import("template.zig");
     _ = @import("store.zig");
     _ = @import("config.zig");
+    _ = @import("workflow.zig");
 }
