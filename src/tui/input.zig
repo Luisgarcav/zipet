@@ -19,12 +19,14 @@ pub fn handleKeyPress(allocator: std.mem.Allocator, key: Key, state: *State, sni
         .search => handleSearchKey(allocator, key, state, snip_store),
         .command => handleCommandKey(allocator, key, state, snip_store, cfg),
         .confirm_delete => handleConfirmDeleteKey(allocator, key, state, snip_store),
+        .confirm_delete_multi => handleConfirmDeleteMultiKey(allocator, key, state, snip_store),
         .tag_picker => handleTagPickerKey(allocator, key, state, snip_store),
         .form => handleFormKey(allocator, key, state, snip_store),
         .param_input => try handleParamInputKey(allocator, key, state, snip_store, cfg),
         .output_view => handleOutputViewKey(key, state),
         .workspace_picker => try handleWorkspacePickerKey(allocator, key, state, snip_store, cfg),
         .pack_browser => try handlePackBrowserKey(allocator, key, state, snip_store, cfg),
+        .pack_preview => try handlePackPreviewKey(allocator, key, state, snip_store, cfg),
         .info => {
             if (key.matches('i', .{}) or key.matches(Key.escape, .{}) or key.matches('q', .{}))
                 state.mode = .normal;
@@ -185,6 +187,48 @@ fn handleNormalKey(allocator: std.mem.Allocator, key: Key, state: *State, snip_s
             state.mode = .tag_picker;
         } else state.message = "No tags found";
         state.pending_g = false;
+    } else if (key.matches('x', .{})) {
+        // Toggle selection on current item
+        if (total > 0 and state.cursor < total) {
+            const si = state.filtered_indices[state.cursor];
+            state.toggleSelect(si);
+            // Move down after toggle
+            if (state.cursor + 1 < total) {
+                state.cursor += 1;
+                utils.adjustScroll(state, 24);
+            }
+        }
+        state.pending_g = false;
+    } else if (key.matches('X', .{}) or key.matches('x', .{ .shift = true })) {
+        // Toggle all visible / clear all
+        if (state.selectionCount() > 0) {
+            state.clearSelection();
+            state.message = "Selection cleared";
+        } else {
+            for (state.filtered_indices) |si| {
+                state.selected_set.put(si, {}) catch {};
+            }
+            var buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "{d} selected", .{state.filtered_indices.len}) catch "Selected all";
+            state.message = allocator.dupe(u8, msg) catch "Selected all";
+        }
+        state.pending_g = false;
+    } else if (key.matches('R', .{}) or key.matches('r', .{ .shift = true })) {
+        // Run selected in parallel
+        if (state.selectionCount() > 0) {
+            try actions.executeSelectedParallel(allocator, state, snip_store);
+        } else {
+            state.message = "No snippets selected (use x to select)";
+        }
+        state.pending_g = false;
+    } else if (key.matches('D', .{}) or key.matches('d', .{ .shift = true })) {
+        // Delete selected
+        if (state.selectionCount() > 0) {
+            state.mode = .confirm_delete_multi;
+        } else {
+            state.message = "No snippets selected (use x to select)";
+        }
+        state.pending_g = false;
     } else if (key.matches('i', .{})) {
         if (total > 0 and state.cursor < total) state.mode = .info;
         state.pending_g = false;
@@ -279,6 +323,16 @@ fn handleConfirmDeleteKey(allocator: std.mem.Allocator, key: Key, state: *State,
             utils.adjustScroll(state, 24);
             state.message = "✓ Deleted";
         }
+        state.mode = .normal;
+    } else {
+        state.mode = .normal;
+        state.message = "Delete cancelled";
+    }
+}
+
+fn handleConfirmDeleteMultiKey(allocator: std.mem.Allocator, key: Key, state: *State, snip_store: *store.Store) void {
+    if (key.matches('y', .{}) or key.matches('Y', .{}) or key.matches('y', .{ .shift = true })) {
+        actions.deleteSelected(allocator, state, snip_store);
         state.mode = .normal;
     } else {
         state.mode = .normal;
@@ -435,6 +489,59 @@ fn handleWorkspacePickerKey(allocator: std.mem.Allocator, key: Key, state: *Stat
     }
 }
 
+fn handlePackPreviewKey(allocator: std.mem.Allocator, key: Key, state: *State, snip_store: *store.Store, cfg: config.Config) !void {
+    const total = state.pack_preview_items.len;
+
+    if (key.matches(Key.escape, .{}) or key.matches('q', .{}) or key.matches('h', .{})) {
+        // Go back to pack browser
+        state.mode = .pack_browser;
+        return;
+    }
+
+    if (key.matches('j', .{}) or key.matches(Key.down, .{})) {
+        if (total > 0 and state.pack_preview_cursor + 1 < total) state.pack_preview_cursor += 1;
+    } else if (key.matches('k', .{}) or key.matches(Key.up, .{})) {
+        if (state.pack_preview_cursor > 0) state.pack_preview_cursor -= 1;
+    } else if (key.matches('g', .{})) {
+        state.pack_preview_cursor = 0;
+        state.pack_preview_scroll = 0;
+    } else if (key.matches('G', .{}) or key.matches('g', .{ .shift = true })) {
+        if (total > 0) state.pack_preview_cursor = total - 1;
+    } else if (key.matches('d', .{ .ctrl = true })) {
+        const half = @as(usize, @intCast(state.listHeight(24))) / 2;
+        if (total > 0) state.pack_preview_cursor = @min(state.pack_preview_cursor + half, total - 1);
+    } else if (key.matches('u', .{ .ctrl = true })) {
+        state.pack_preview_cursor -|= @as(usize, @intCast(state.listHeight(24))) / 2;
+    } else if (key.matches(Key.enter, .{}) or key.matches('i', .{})) {
+        // Install from preview
+        if (state.pack_preview_installed) {
+            state.message = "Pack already installed";
+        } else {
+            const result = pack_mod.install(allocator, cfg, state.pack_preview_name, null, snip_store) catch {
+                state.message = "✗ Failed to install pack";
+                return;
+            };
+            defer pack_mod.freeInstallResult(allocator, result);
+
+            if (result.err_msg) |_| {
+                state.message = "✗ Failed to install pack";
+            } else {
+                state.pack_preview_installed = true;
+                // Also update the pack_list entry
+                for (state.pack_list) |*p| {
+                    if (std.mem.eql(u8, p.name, state.pack_preview_name)) {
+                        p.installed = true;
+                        break;
+                    }
+                }
+                allocator.free(state.filtered_indices);
+                state.filtered_indices = utils.updateFilter(allocator, snip_store, "") catch &.{};
+                state.message = "✓ Pack installed!";
+            }
+        }
+    }
+}
+
 fn handlePackBrowserKey(allocator: std.mem.Allocator, key: Key, state: *State, snip_store: *store.Store, cfg: config.Config) !void {
     const total = state.pack_list.len;
 
@@ -451,7 +558,13 @@ fn handlePackBrowserKey(allocator: std.mem.Allocator, key: Key, state: *State, s
         state.pack_cursor = 0;
     } else if (key.matches('G', .{}) or key.matches('g', .{ .shift = true })) {
         if (total > 0) state.pack_cursor = total - 1;
-    } else if (key.matches(Key.enter, .{}) or key.matches('i', .{})) {
+    } else if (key.matches(Key.enter, .{}) or key.matches('l', .{}) or key.matches(' ', .{})) {
+        // Open pack preview
+        if (total > 0 and state.pack_cursor < total) {
+            try actions.openPackPreview(allocator, state);
+        }
+    } else if (key.matches('i', .{})) {
+        // Direct install from browser
         if (total > 0 and state.pack_cursor < total) {
             const p = &state.pack_list[state.pack_cursor];
             if (p.installed) {

@@ -30,6 +30,10 @@ const help_lines = [_]HelpLine{
     .{ .text = "  o             Open TOML file", .is_header = false, .is_spacer = false },
     .{ .text = "  i             Full info panel", .is_header = false, .is_spacer = false },
     .{ .text = "  Space         Toggle preview", .is_header = false, .is_spacer = false },
+    .{ .text = "  x             Toggle select", .is_header = false, .is_spacer = false },
+    .{ .text = "  X             Select all / Clear", .is_header = false, .is_spacer = false },
+    .{ .text = "  R             Run selected ∥", .is_header = false, .is_spacer = false },
+    .{ .text = "  D             Delete selected", .is_header = false, .is_spacer = false },
     .{ .text = "  t             Filter by tag", .is_header = false, .is_spacer = false },
     .{ .text = "  W             Workspace picker", .is_header = false, .is_spacer = false },
     .{ .text = "  P             Pack browser", .is_header = false, .is_spacer = false },
@@ -67,17 +71,21 @@ pub fn renderMainScreen(win: Window, state: *State, snip_store: *store.Store, cf
             }, .{ .col_offset = ws_col });
         }
 
+        const sel_count = state.selectionCount();
         var wf_count: usize = 0;
         for (snip_store.snippets.items) |s| if (s.kind == .workflow) {
             wf_count += 1;
         };
-        var rb: [64]u8 = undefined;
-        const rt = if (wf_count > 0)
+        var rb: [96]u8 = undefined;
+        const rt = if (sel_count > 0)
+            std.fmt.bufPrint(&rb, " {d} selected  {d} snippets ", .{ sel_count, snip_store.snippets.items.len }) catch "?"
+        else if (wf_count > 0)
             std.fmt.bufPrint(&rb, "{d} snippets  {d} wf ", .{ snip_store.snippets.items.len - wf_count, wf_count }) catch "?"
         else
             std.fmt.bufPrint(&rb, "{d} snippets ", .{snip_store.snippets.items.len}) catch "?";
         const rc: u16 = mw.width -| @as(u16, @intCast(@min(rt.len, mw.width)));
-        _ = bar.print(&.{.{ .text = rt, .style = t.reverse_style }}, .{ .col_offset = rc });
+        const bar_style: t.Style = if (sel_count > 0) .{ .reverse = true, .fg = .{ .index = 3 } } else t.reverse_style;
+        _ = bar.print(&.{.{ .text = rt, .style = bar_style }}, .{ .col_offset = rc });
     }
 
     // Search bar (row 1)
@@ -138,11 +146,17 @@ pub fn renderMainScreen(win: Window, state: *State, snip_store: *store.Store, cf
         const by: u16 = win.height -| 1;
         if (state.mode == .confirm_delete) {
             _ = mw.print(&.{.{ .text = " Delete this snippet? (y/N)", .style = t.del_style }}, .{ .row_offset = by });
+        } else if (state.mode == .confirm_delete_multi) {
+            var dbuf: [80]u8 = undefined;
+            const dtxt = std.fmt.bufPrint(&dbuf, " Delete {d} selected snippets? (y/N)", .{state.selectionCount()}) catch " Delete selected? (y/N)";
+            _ = mw.print(&.{.{ .text = dtxt, .style = t.del_style }}, .{ .row_offset = by });
         } else if (state.message) |msg| {
             _ = mw.print(&.{.{ .text = msg, .style = t.dim_style }}, .{ .row_offset = by });
             state.message = null;
+        } else if (state.selectionCount() > 0) {
+            _ = mw.print(&.{.{ .text = " x toggle  X clear  R run parallel  D delete  Enter run cursor", .style = .{ .fg = .{ .index = 3 } } }}, .{ .row_offset = by });
         } else {
-            _ = mw.print(&.{.{ .text = " j/k move  Enter run  a add  e edit  d del  y yank  W ws  P packs  ? help", .style = t.dim_style }}, .{ .row_offset = by });
+            _ = mw.print(&.{.{ .text = " j/k move  Enter run  x select  a add  e edit  d del  y yank  P packs  ? help", .style = t.dim_style }}, .{ .row_offset = by });
         }
     }
 
@@ -190,8 +204,14 @@ fn renderList(win: Window, state: *State, snip_store: *store.Store, cfg: config.
             .chain => t.chain_style,
         };
 
-        if (sel) {
+        const is_marked = state.isSelected(si);
+
+        if (sel and is_marked) {
+            _ = win.print(&.{.{ .text = " ▸●", .style = ab }}, .{ .row_offset = row });
+        } else if (sel) {
             _ = win.print(&.{.{ .text = " ▸ ", .style = ab }}, .{ .row_offset = row });
+        } else if (is_marked) {
+            _ = win.print(&.{.{ .text = "  ●", .style = .{ .fg = .{ .index = 3 }, .bold = true } }}, .{ .row_offset = row });
         } else {
             _ = win.print(&.{.{ .text = "   ", .style = .{} }}, .{ .row_offset = row });
         }
@@ -771,7 +791,221 @@ pub fn renderPackBrowser(win: Window, state: *State, cfg: config.Config) void {
         }
     }
 
-    _ = win.print(&.{.{ .text = " j/k move  Enter install  u uninstall  q close", .style = t.dim_style }}, .{ .row_offset = win.height -| 1 });
+    _ = win.print(&.{.{ .text = " j/k move  Enter/Space preview  i install  u uninstall  q close", .style = t.dim_style }}, .{ .row_offset = win.height -| 1 });
+
+    if (state.message) |msg| {
+        const msg_col: u16 = win.width -| @as(u16, @intCast(@min(msg.len + 2, win.width)));
+        _ = win.print(&.{.{ .text = msg, .style = t.success_style }}, .{ .row_offset = win.height -| 1, .col_offset = msg_col });
+        state.message = null;
+    }
+}
+
+// ── Pack preview rendering ──
+pub fn renderPackPreview(win: Window, state: *State, cfg: config.Config) void {
+    const ab = t.accentBoldStyle(cfg.accent_color);
+    const as = t.accentStyle(cfg.accent_color);
+    const pack_mod = @import("../pack.zig");
+    _ = pack_mod;
+
+    // Title bar
+    {
+        const bar = win.child(.{ .height = 1 });
+        bar.fill(.{ .style = t.reverse_style });
+
+        var title_buf: [128]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, " 📦 Pack: {s}", .{state.pack_preview_name}) catch " 📦 Pack Preview";
+        _ = bar.print(&.{.{ .text = title, .style = t.reverse_style }}, .{});
+
+        if (state.pack_preview_installed) {
+            _ = bar.print(&.{.{ .text = " ✓ installed", .style = .{ .reverse = true, .fg = .{ .index = 2 } } }}, .{ .col_offset = @intCast(@min(title.len + 1, win.width -| 1)) });
+        }
+
+        var rb: [32]u8 = undefined;
+        const rt = std.fmt.bufPrint(&rb, "{d} items ", .{state.pack_preview_items.len}) catch "?";
+        const rc: u16 = win.width -| @as(u16, @intCast(@min(rt.len, win.width)));
+        _ = bar.print(&.{.{ .text = rt, .style = t.reverse_style }}, .{ .col_offset = rc });
+    }
+
+    hline(win, 1, win.width);
+
+    if (state.pack_preview_items.len == 0) {
+        _ = win.print(&.{.{ .text = "  No snippets or workflows in this pack.", .style = t.dim_style }}, .{ .row_offset = 3 });
+        _ = win.print(&.{.{ .text = " q/Esc back", .style = t.dim_style }}, .{ .row_offset = win.height -| 1 });
+        return;
+    }
+
+    // Split: list on left, detail preview on right (or bottom if narrow)
+    const use_side_preview = win.width > 80;
+    const list_w: u16 = if (use_side_preview) @intCast(@min(win.width / 2, 45)) else win.width;
+    const content_h: usize = @intCast(win.height -| 4);
+    const items_per_entry: usize = 2;
+    const visible_items = content_h / items_per_entry;
+
+    // Adjust scroll
+    if (state.pack_preview_cursor < state.pack_preview_scroll) {
+        state.pack_preview_scroll = state.pack_preview_cursor;
+    } else if (state.pack_preview_cursor >= state.pack_preview_scroll + visible_items) {
+        state.pack_preview_scroll = state.pack_preview_cursor -| (visible_items -| 1);
+    }
+
+    // Render list
+    var row: u16 = 2;
+    var pi = state.pack_preview_scroll;
+    while (pi < state.pack_preview_items.len and row + 1 < win.height -| 1) : (pi += 1) {
+        const item = &state.pack_preview_items[pi];
+        const selected = pi == state.pack_preview_cursor;
+
+        // Icon and selection indicator
+        if (selected) {
+            _ = win.print(&.{.{ .text = " ▸ ", .style = ab }}, .{ .row_offset = row });
+        } else {
+            _ = win.print(&.{.{ .text = "   ", .style = .{} }}, .{ .row_offset = row });
+        }
+
+        const icon: []const u8 = switch (item.kind) {
+            .workflow => ">>",
+            .snippet => " $",
+        };
+        const ks: Style = switch (item.kind) {
+            .workflow => t.wf_style,
+            .snippet => t.snip_icon_style,
+        };
+        _ = win.print(&.{.{ .text = icon, .style = ks }}, .{ .row_offset = row, .col_offset = 3 });
+
+        // Name
+        const name_style = if (selected) ab else t.bold_style;
+        _ = win.print(&.{.{ .text = item.name, .style = name_style }}, .{ .row_offset = row, .col_offset = 6 });
+
+        // Description (truncated to list width)
+        const desc_col: u16 = @min(list_w -| 2, 28);
+        if (desc_col < list_w and item.desc.len > 0) {
+            const max_desc = @min(item.desc.len, @as(usize, list_w -| desc_col -| 1));
+            _ = win.print(&.{.{ .text = item.desc[0..max_desc], .style = if (selected) .{} else t.dim_style }}, .{ .row_offset = row, .col_offset = desc_col });
+        }
+
+        row += 1;
+
+        // Tags line
+        if (row < win.height -| 1 and item.tags.len > 0) {
+            _ = win.print(&.{.{ .text = "      [", .style = t.dim_style }}, .{ .row_offset = row });
+            var tc: u16 = 7;
+            for (item.tags, 0..) |tag, ti| {
+                if (ti > 0 and tc + 2 < list_w) {
+                    _ = win.print(&.{.{ .text = ", ", .style = t.dim_style }}, .{ .row_offset = row, .col_offset = tc });
+                    tc += 2;
+                }
+                if (tc + @as(u16, @intCast(tag.len)) < list_w) {
+                    _ = win.print(&.{.{ .text = tag, .style = t.dim_style }}, .{ .row_offset = row, .col_offset = tc });
+                    tc += @intCast(tag.len);
+                }
+            }
+            if (tc < list_w) _ = win.print(&.{.{ .text = "]", .style = t.dim_style }}, .{ .row_offset = row, .col_offset = tc });
+            row += 1;
+        } else {
+            row += 1;
+        }
+    }
+
+    // Detail preview panel
+    if (state.pack_preview_cursor < state.pack_preview_items.len) {
+        const item = &state.pack_preview_items[state.pack_preview_cursor];
+
+        if (use_side_preview) {
+            // Side panel
+            const panel_x: u16 = list_w;
+            var pr: u16 = 2;
+
+            // Vertical separator
+            var sr: u16 = 2;
+            while (sr < win.height -| 1) : (sr += 1) {
+                win.writeCell(panel_x, sr, .{ .char = .{ .grapheme = "│", .width = 1 }, .style = t.dim_style });
+            }
+
+            const px: u16 = panel_x + 2;
+
+            _ = win.print(&.{.{ .text = "── Preview ──", .style = ab }}, .{ .row_offset = pr, .col_offset = px });
+            pr += 1;
+
+            _ = win.print(&.{
+                .{ .text = "Name: ", .style = t.dim_style },
+                .{ .text = item.name, .style = t.bold_style },
+            }, .{ .row_offset = pr, .col_offset = px });
+            pr += 1;
+
+            if (item.desc.len > 0) {
+                const max_d = @min(item.desc.len, @as(usize, win.width -| px -| 1));
+                _ = win.print(&.{.{ .text = item.desc[0..max_d], .style = .{} }}, .{ .row_offset = pr, .col_offset = px });
+                pr += 1;
+            }
+            pr += 1;
+
+            if (item.kind == .snippet and item.cmd.len > 0) {
+                _ = win.print(&.{.{ .text = "Command:", .style = t.dim_style }}, .{ .row_offset = pr, .col_offset = px });
+                pr += 1;
+
+                // Word-wrap command into available width
+                const cmd_w = @as(usize, win.width -| px -| 3);
+                var cmd_remaining = item.cmd;
+                while (cmd_remaining.len > 0 and pr < win.height -| 2) {
+                    const chunk = @min(cmd_remaining.len, cmd_w);
+                    _ = win.print(&.{
+                        .{ .text = "$ ", .style = as },
+                        .{ .text = cmd_remaining[0..chunk], .style = .{} },
+                    }, .{ .row_offset = pr, .col_offset = px });
+                    cmd_remaining = cmd_remaining[chunk..];
+                    pr += 1;
+                }
+            } else if (item.kind == .workflow) {
+                _ = win.print(&.{.{ .text = "Type: workflow", .style = t.wf_style }}, .{ .row_offset = pr, .col_offset = px });
+                pr += 1;
+            }
+
+            if (item.tags.len > 0 and pr + 1 < win.height -| 1) {
+                pr += 1;
+                _ = win.print(&.{.{ .text = "Tags: ", .style = t.dim_style }}, .{ .row_offset = pr, .col_offset = px });
+                var tc: u16 = px + 6;
+                for (item.tags, 0..) |tag, ti| {
+                    if (ti > 0 and tc + 2 < win.width) {
+                        _ = win.print(&.{.{ .text = ", ", .style = t.dim_style }}, .{ .row_offset = pr, .col_offset = tc });
+                        tc += 2;
+                    }
+                    if (tc + @as(u16, @intCast(tag.len)) < win.width) {
+                        _ = win.print(&.{.{ .text = tag, .style = as }}, .{ .row_offset = pr, .col_offset = tc });
+                        tc += @intCast(tag.len);
+                    }
+                }
+            }
+        } else {
+            // Bottom panel (narrow terminal)
+            const preview_row: u16 = win.height -| 5;
+            if (preview_row > row) {
+                hline(win, preview_row, win.width);
+
+                var pr = preview_row + 1;
+                _ = win.print(&.{
+                    .{ .text = " ", .style = .{} },
+                    .{ .text = item.name, .style = t.bold_style },
+                    .{ .text = " — ", .style = t.dim_style },
+                    .{ .text = item.desc, .style = .{} },
+                }, .{ .row_offset = pr });
+                pr += 1;
+
+                if (item.kind == .snippet and item.cmd.len > 0 and pr < win.height -| 1) {
+                    const max_cmd = @min(item.cmd.len, @as(usize, win.width -| 5));
+                    _ = win.print(&.{
+                        .{ .text = " $ ", .style = as },
+                        .{ .text = item.cmd[0..max_cmd], .style = .{} },
+                    }, .{ .row_offset = pr });
+                }
+            }
+        }
+    }
+
+    // Bottom bar
+    const install_hint: []const u8 = if (state.pack_preview_installed) "already installed" else "Enter install";
+    var hint_buf: [128]u8 = undefined;
+    const hint = std.fmt.bufPrint(&hint_buf, " j/k move  {s}  q/Esc back to browser", .{install_hint}) catch " j/k  Enter install  q back";
+    _ = win.print(&.{.{ .text = hint, .style = t.dim_style }}, .{ .row_offset = win.height -| 1 });
 
     if (state.message) |msg| {
         const msg_col: u16 = win.width -| @as(u16, @intCast(@min(msg.len + 2, win.width)));

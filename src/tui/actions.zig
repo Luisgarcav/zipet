@@ -322,6 +322,156 @@ pub fn openWorkspacePicker(allocator: std.mem.Allocator, state: *State, cfg: con
     state.mode = .workspace_picker;
 }
 
+pub fn executeSelectedParallel(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store) !void {
+    const count = state.selectionCount();
+    if (count == 0) return;
+
+    state.output.deinit();
+    state.output = OutputBuf.init(allocator);
+    state.output_scroll = 0;
+    state.output_title = allocator.dupe(u8, "Parallel Execution") catch "";
+
+    // Collect items to run
+    var items: std.ArrayList(executor.ParallelItem) = .{};
+    defer items.deinit(allocator);
+
+    var rendered_cmds: std.ArrayList([]const u8) = .{};
+    defer {
+        for (rendered_cmds.items) |c| allocator.free(c);
+        rendered_cmds.deinit(allocator);
+    }
+
+    var sel_iter = state.selected_set.keyIterator();
+    while (sel_iter.next()) |idx_ptr| {
+        const si = idx_ptr.*;
+        if (si >= snip_store.snippets.items.len) continue;
+        const snip = &snip_store.snippets.items[si];
+        if (snip.kind == .workflow) continue; // skip workflows for parallel
+        if (snip.params.len > 0) continue; // skip snippets with params
+
+        const rendered = template.render(allocator, snip.cmd, &.{}, &.{}) catch continue;
+        try rendered_cmds.append(allocator, rendered);
+
+        try items.append(allocator, .{
+            .name = snip.name,
+            .cmd = rendered,
+        });
+    }
+
+    if (items.items.len == 0) {
+        state.output.add("No executable snippets in selection", .err);
+        state.output.add("(Snippets with parameters and workflows are skipped)", .dim);
+        state.mode = .output_view;
+        return;
+    }
+
+    state.output.addFmt(allocator, ">> Running {d} snippets in parallel...", .{items.items.len}, .header);
+    state.output.add("", .normal);
+
+    const results = executor.runParallel(allocator, items.items) catch |err| {
+        state.output.addFmt(allocator, "Parallel execution error: {}", .{err}, .err);
+        state.mode = .output_view;
+        return;
+    };
+    defer executor.freeParallelResults(allocator, results);
+
+    var total_ok: usize = 0;
+    var total_fail: usize = 0;
+
+    for (results) |r| {
+        state.output.addFmt(allocator, "── {s} ──", .{r.name}, .header);
+        state.output.addFmt(allocator, "  Duration: {d}ms", .{r.duration_ms}, .dim);
+
+        if (r.err) {
+            state.output.add("  ✗ Failed to execute", .err);
+            total_fail += 1;
+        } else {
+            if (r.stdout.len > 0) state.output.addMultiline(r.stdout, .normal);
+            if (r.stderr.len > 0) {
+                state.output.add("  stderr:", .dim);
+                state.output.addMultiline(r.stderr, .err);
+            }
+            if (r.exit_code == 0) {
+                state.output.add("  ✓ OK", .success);
+                total_ok += 1;
+            } else {
+                state.output.addFmt(allocator, "  ✗ Exit code: {d}", .{r.exit_code}, .err);
+                total_fail += 1;
+            }
+        }
+        state.output.add("", .normal);
+    }
+
+    state.output.addFmt(allocator, "── Summary: {d} ok, {d} failed ──", .{ total_ok, total_fail }, if (total_fail == 0) .success else .err);
+    state.clearSelection();
+    state.mode = .output_view;
+}
+
+pub fn deleteSelected(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store) void {
+    const count = state.selectionCount();
+    if (count == 0) return;
+
+    // Collect indices in descending order to safely remove
+    var indices: std.ArrayList(usize) = .{};
+    defer indices.deinit(allocator);
+
+    var sel_iter = state.selected_set.keyIterator();
+    while (sel_iter.next()) |idx_ptr| {
+        indices.append(allocator, idx_ptr.*) catch {};
+    }
+
+    // Sort descending so removal doesn't shift later indices
+    std.mem.sort(usize, indices.items, {}, struct {
+        fn cmp(_: void, a: usize, b: usize) bool {
+            return a > b;
+        }
+    }.cmp);
+
+    var removed: usize = 0;
+    for (indices.items) |si| {
+        if (si >= snip_store.snippets.items.len) continue;
+        const name = snip_store.snippets.items[si].name;
+        snip_store.remove(name) catch continue;
+        removed += 1;
+    }
+
+    state.clearSelection();
+    allocator.free(state.filtered_indices);
+    state.filtered_indices = utils.updateFilter(allocator, snip_store, state.searchQuery()) catch &.{};
+
+    if (state.filtered_indices.len == 0) {
+        state.cursor = 0;
+        state.scroll_offset = 0;
+    } else if (state.cursor >= state.filtered_indices.len) {
+        state.cursor = state.filtered_indices.len - 1;
+    }
+    utils.adjustScroll(state, 24);
+
+    if (removed > 0) {
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "✓ Deleted {d} snippets", .{removed}) catch "✓ Deleted";
+        state.message = allocator.dupe(u8, msg) catch "✓ Deleted";
+    }
+}
+
+pub fn openPackPreview(allocator: std.mem.Allocator, state: *State) !void {
+    if (state.pack_list.len == 0 or state.pack_cursor >= state.pack_list.len) return;
+    const p = &state.pack_list[state.pack_cursor];
+
+    // Free previous preview if any
+    if (state.pack_preview_items.len > 0) {
+        pack_mod.freePackPreview(allocator, state.pack_preview_items);
+        state.pack_preview_items = &.{};
+    }
+
+    state.pack_preview_items = try pack_mod.getPackPreview(allocator, p.name);
+    state.pack_preview_cursor = 0;
+    state.pack_preview_scroll = 0;
+    state.pack_preview_name = p.name;
+    state.pack_preview_installed = p.installed;
+    state.mode = .pack_preview;
+}
+
 pub fn openPackBrowser(allocator: std.mem.Allocator, state: *State, cfg: config.Config) !void {
     if (state.pack_list.len > 0) {
         pack_mod.freePackMetas(allocator, state.pack_list);

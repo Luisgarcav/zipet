@@ -17,6 +17,18 @@
 
 ---
 
+## 📥 Install
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Luisgarcav/zipet/main/scripts/install.sh | bash
+```
+
+That's it. The script detects your OS and architecture, downloads the right binary, and places it in `~/.local/bin/`.
+
+> Supports **Linux** (x86_64) and **macOS** (x86_64 / Apple Silicon).
+
+---
+
 ## ✨ Why zipet?
 
 You type the same commands over and over. You forget that perfect `find` incantation. Your `~/.bash_history` is a graveyard of useful one-liners you'll never find again.
@@ -462,7 +474,7 @@ editor = "vim"           # Editor for 'edit' command
 **Requirements:** Zig ≥ 0.15.1
 
 ```bash
-git clone https://github.com/zipet/zipet.git
+git clone https://github.com/Luisgarcav/zipet.git
 cd zipet
 zig build -Doptimize=ReleaseFast
 

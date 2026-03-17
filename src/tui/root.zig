@@ -36,6 +36,8 @@ pub fn run(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.C
     var state = t.State{};
     state.output = OutputBuf.init(allocator);
     defer state.output.deinit();
+    state.initSelectedSet(allocator);
+    defer state.deinitSelectedSet();
     state.active_workspace = workspace_mod.getActiveWorkspace(allocator, cfg) catch null;
     defer if (state.active_workspace) |ws| allocator.free(ws);
     state.filtered_indices = try utils.updateFilter(allocator, snip_store, state.searchQuery());
@@ -61,6 +63,7 @@ pub fn run(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.C
                 render.renderWorkspacePicker(win, &state, allocator, cfg);
             },
             .pack_browser => render.renderPackBrowser(win, &state, cfg),
+            .pack_preview => render.renderPackPreview(win, &state, cfg),
             else => {
                 render.renderMainScreen(win, &state, snip_store, cfg);
             },

@@ -27,6 +27,7 @@ pub const Mode = enum {
     command,
     help,
     confirm_delete,
+    confirm_delete_multi,
     tag_picker,
     info,
     form,
@@ -34,6 +35,7 @@ pub const Mode = enum {
     output_view,
     workspace_picker,
     pack_browser,
+    pack_preview,
 };
 
 // ── Text Field ──
@@ -227,6 +229,10 @@ pub const State = struct {
     tag_cursor: usize = 0,
     active_tag_filter: ?[]const u8 = null,
 
+    // Multi-select state
+    selected_set: std.AutoHashMap(usize, void) = undefined,
+    selected_set_inited: bool = false,
+
     // Sub-states
     form: FormState = .{},
     param_input: ParamInputState = .{},
@@ -244,6 +250,51 @@ pub const State = struct {
     pack_list: []pack_mod.PackMeta = &.{},
     pack_cursor: usize = 0,
     pack_scroll: usize = 0,
+
+    // Pack preview state
+    pack_preview_items: []pack_mod.PackItemPreview = &.{},
+    pack_preview_cursor: usize = 0,
+    pack_preview_scroll: usize = 0,
+    pack_preview_name: []const u8 = "",
+    pack_preview_installed: bool = false,
+
+    pub fn initSelectedSet(self: *State, allocator: std.mem.Allocator) void {
+        if (!self.selected_set_inited) {
+            self.selected_set = std.AutoHashMap(usize, void).init(allocator);
+            self.selected_set_inited = true;
+        }
+    }
+
+    pub fn deinitSelectedSet(self: *State) void {
+        if (self.selected_set_inited) {
+            self.selected_set.deinit();
+            self.selected_set_inited = false;
+        }
+    }
+
+    pub fn toggleSelect(self: *State, store_idx: usize) void {
+        if (self.selected_set.contains(store_idx)) {
+            _ = self.selected_set.remove(store_idx);
+        } else {
+            self.selected_set.put(store_idx, {}) catch {};
+        }
+    }
+
+    pub fn isSelected(self: *State, store_idx: usize) bool {
+        if (!self.selected_set_inited) return false;
+        return self.selected_set.contains(store_idx);
+    }
+
+    pub fn selectionCount(self: *State) usize {
+        if (!self.selected_set_inited) return 0;
+        return self.selected_set.count();
+    }
+
+    pub fn clearSelection(self: *State) void {
+        if (self.selected_set_inited) {
+            self.selected_set.clearRetainingCapacity();
+        }
+    }
 
     pub fn searchQuery(self: *State) []const u8 {
         return self.search_buf[0..self.search_len];

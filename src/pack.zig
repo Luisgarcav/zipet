@@ -517,6 +517,139 @@ pub fn freeInstallResult(allocator: std.mem.Allocator, r: InstallResult) void {
     if (r.err_msg) |e| allocator.free(e);
 }
 
+/// A single snippet/workflow entry preview from a pack file
+pub const PackItemPreview = struct {
+    name: []const u8,
+    desc: []const u8,
+    cmd: []const u8,
+    tags: []const []const u8,
+    kind: enum { snippet, workflow },
+};
+
+/// Get a detailed preview of all snippets/workflows inside a pack (by pack name)
+pub fn getPackPreview(allocator: std.mem.Allocator, name: []const u8) ![]PackItemPreview {
+    // Find the pack file
+    const builtin_path = try getBuiltinPackPath(allocator, name);
+    defer allocator.free(builtin_path);
+
+    const file = std.fs.openFileAbsolute(builtin_path, .{}) catch {
+        return allocator.alloc(PackItemPreview, 0);
+    };
+    defer file.close();
+
+    const content = try file.readToEndAlloc(allocator, 1024 * 512);
+    defer allocator.free(content);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const table = toml.parse(arena.allocator(), content) catch {
+        return allocator.alloc(PackItemPreview, 0);
+    };
+
+    var result: std.ArrayList(PackItemPreview) = .{};
+
+    // Collect snippet names
+    var snippet_names = std.StringHashMap(void).init(allocator);
+    defer {
+        var key_iter = snippet_names.keyIterator();
+        while (key_iter.next()) |k| allocator.free(k.*);
+        snippet_names.deinit();
+    }
+
+    for (table.keys) |key| {
+        if (std.mem.startsWith(u8, key, "snippets.")) {
+            const rest = key["snippets.".len..];
+            if (std.mem.indexOfScalar(u8, rest, '.')) |dot| {
+                const sn = rest[0..dot];
+                if (!snippet_names.contains(sn)) {
+                    try snippet_names.put(try allocator.dupe(u8, sn), {});
+                }
+            }
+        }
+    }
+
+    var name_iter = snippet_names.keyIterator();
+    while (name_iter.next()) |name_ptr| {
+        const sname = name_ptr.*;
+        const cmd_key = try std.fmt.allocPrint(allocator, "snippets.{s}.cmd", .{sname});
+        defer allocator.free(cmd_key);
+        const desc_key = try std.fmt.allocPrint(allocator, "snippets.{s}.desc", .{sname});
+        defer allocator.free(desc_key);
+        const tags_key = try std.fmt.allocPrint(allocator, "snippets.{s}.tags", .{sname});
+        defer allocator.free(tags_key);
+
+        const cmd_val = table.getString(cmd_key) orelse continue;
+        const desc_val = table.getString(desc_key) orelse "";
+
+        var tags: std.ArrayList([]const u8) = .{};
+        if (table.getArray(tags_key)) |arr| {
+            for (arr) |item| {
+                switch (item) {
+                    .string => |s| try tags.append(allocator, try allocator.dupe(u8, s)),
+                    else => {},
+                }
+            }
+        }
+
+        try result.append(allocator, .{
+            .name = try allocator.dupe(u8, sname),
+            .desc = try allocator.dupe(u8, desc_val),
+            .cmd = try allocator.dupe(u8, cmd_val),
+            .tags = try tags.toOwnedSlice(allocator),
+            .kind = .snippet,
+        });
+    }
+
+    // Collect workflow names
+    var wf_names = std.StringHashMap(void).init(allocator);
+    defer {
+        var key_iter = wf_names.keyIterator();
+        while (key_iter.next()) |k| allocator.free(k.*);
+        wf_names.deinit();
+    }
+
+    for (table.keys) |key| {
+        if (std.mem.startsWith(u8, key, "workflows.")) {
+            const rest = key["workflows.".len..];
+            if (std.mem.indexOfScalar(u8, rest, '.')) |dot| {
+                const wn = rest[0..dot];
+                if (!wf_names.contains(wn)) {
+                    try wf_names.put(try allocator.dupe(u8, wn), {});
+                }
+            }
+        }
+    }
+
+    var wf_iter = wf_names.keyIterator();
+    while (wf_iter.next()) |wn_ptr| {
+        const wname = wn_ptr.*;
+        const desc_key = try std.fmt.allocPrint(allocator, "workflows.{s}.desc", .{wname});
+        defer allocator.free(desc_key);
+        const desc_val = table.getString(desc_key) orelse "";
+
+        try result.append(allocator, .{
+            .name = try allocator.dupe(u8, wname),
+            .desc = try allocator.dupe(u8, desc_val),
+            .cmd = try allocator.dupe(u8, ""),
+            .tags = try allocator.alloc([]const u8, 0),
+            .kind = .workflow,
+        });
+    }
+
+    return try result.toOwnedSlice(allocator);
+}
+
+pub fn freePackPreview(allocator: std.mem.Allocator, items: []PackItemPreview) void {
+    for (items) |item| {
+        allocator.free(item.name);
+        allocator.free(item.desc);
+        allocator.free(item.cmd);
+        for (item.tags) |tag| allocator.free(tag);
+        allocator.free(item.tags);
+    }
+    allocator.free(items);
+}
+
 pub fn freePackMetas(allocator: std.mem.Allocator, metas: []PackMeta) void {
     for (metas) |m| {
         allocator.free(m.name);

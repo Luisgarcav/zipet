@@ -51,6 +51,7 @@ pub fn refilter(allocator: std.mem.Allocator, state: *State, snip_store: *store.
     state.filtered_indices = updateFilterWithTag(allocator, snip_store, state.searchQuery(), state.active_tag_filter) catch &.{};
     state.cursor = 0;
     state.scroll_offset = 0;
+    state.clearSelection();
 }
 
 pub fn updateFilterWithTag(allocator: std.mem.Allocator, snip_store: *store.Store, query: []const u8, tag_filter: ?[]const u8) ![]usize {

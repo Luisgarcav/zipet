@@ -1,4 +1,6 @@
 /// Fuzzy matching algorithm for zipet.
+/// Inspired by fzf/Sublime Text scoring: consecutive matches and word
+/// boundaries are heavily rewarded, while scattered matches are penalised.
 const std = @import("std");
 
 pub const Match = struct {
@@ -10,14 +12,31 @@ pub const Match = struct {
     }
 };
 
+// ── Scoring constants ──────────────────────────────────────────
+// Tuned so that scattered single-letter matches across a long string
+// produce a negative or near-zero score, while tight/exact matches
+// score very high.
+
 const SCORE_MATCH: i32 = 16;
-const SCORE_GAP_START: i32 = -3;
-const SCORE_GAP_EXTENSION: i32 = -1;
-const BONUS_BOUNDARY: i32 = 8;
-const BONUS_CONSECUTIVE: i32 = 4;
-const BONUS_FIRST_CHAR: i32 = 4;
-const BONUS_CAMEL_CASE: i32 = 6;
-const BONUS_EXACT_PREFIX: i32 = 32;
+const SCORE_GAP_START: i32 = -8; // was -3 — much heavier now
+const SCORE_GAP_EXTENSION: i32 = -3; // was -1
+const BONUS_BOUNDARY: i32 = 12; // match at word boundary (after - _ / . :)
+const BONUS_CONSECUTIVE: i32 = 12; // was 4 — consecutive letters are king
+const BONUS_FIRST_CHAR: i32 = 8; // needle starts at haystack start
+const BONUS_CAMEL_CASE: i32 = 8; // camelCase boundary
+const BONUS_EXACT_PREFIX: i32 = 48; // was 32 — needle matches from pos 0
+const BONUS_EXACT_MATCH: i32 = 100; // haystack == needle (case insensitive)
+const BONUS_EXACT_WORD: i32 = 64; // needle matches a full word in haystack
+const BONUS_CASE_MATCH: i32 = 2; // exact case match per char (was 1)
+
+/// Minimum score threshold as a function of needle length.
+/// Short queries need higher per-char quality to avoid noise.
+pub fn scoreThreshold(needle_len: usize) i32 {
+    // Require a solid per-char average to pass. Consecutive tight matches
+    // score ~28/char (MATCH + CONSECUTIVE), so we ask for ~50% of that.
+    // This filters scattered junk while keeping real substring matches.
+    return @as(i32, @intCast(needle_len)) * 14;
+}
 
 pub fn match(allocator: std.mem.Allocator, haystack: []const u8, needle: []const u8) !?Match {
     if (needle.len == 0) {
@@ -36,6 +55,9 @@ pub fn match(allocator: std.mem.Allocator, haystack: []const u8, needle: []const
     }
     if (ni < needle.len) return null;
 
+    // Check for exact case-insensitive match of entire string
+    const is_exact = haystack.len == needle.len and eqlInsensitive(haystack, needle);
+
     var best_score: i32 = std.math.minInt(i32);
     const positions = try allocator.alloc(usize, needle.len);
     const best_positions = try allocator.alloc(usize, needle.len);
@@ -46,8 +68,21 @@ pub fn match(allocator: std.mem.Allocator, haystack: []const u8, needle: []const
         if (toLower(haystack[start]) == toLower(needle[0])) {
             const score = scoreMatch(haystack, needle, start, positions);
             if (score) |s| {
-                if (s > best_score) {
-                    best_score = s;
+                var total = s;
+                if (is_exact) total += BONUS_EXACT_MATCH;
+                // Check if needle matches a complete word in haystack
+                if (!is_exact) {
+                    const end = start + needle.len;
+                    if (end <= haystack.len) {
+                        const at_word_start = (start == 0 or isBoundary(haystack[start - 1]));
+                        const at_word_end = (end == haystack.len or isBoundary(haystack[end]));
+                        if (at_word_start and at_word_end and eqlInsensitive(haystack[start..end], needle)) {
+                            total += BONUS_EXACT_WORD;
+                        }
+                    }
+                }
+                if (total > best_score) {
+                    best_score = total;
                     @memcpy(best_positions, positions);
                 }
             }
@@ -75,11 +110,16 @@ fn scoreMatch(haystack: []const u8, needle: []const u8, start: usize, positions:
             positions[n_i] = h_i;
             score += SCORE_MATCH;
 
-            if (haystack[h_i] == needle[n_i]) score += 1;
+            // Case-exact bonus
+            if (haystack[h_i] == needle[n_i]) score += BONUS_CASE_MATCH;
+            // Starting at position 0
             if (n_i == 0 and h_i == 0) score += BONUS_EXACT_PREFIX;
             if (n_i == 0) score += BONUS_FIRST_CHAR;
+            // Word boundary
             if (h_i > 0 and isBoundary(haystack[h_i - 1])) score += BONUS_BOUNDARY;
+            // camelCase
             if (h_i > 0 and isLower(haystack[h_i - 1]) and isUpper(haystack[h_i])) score += BONUS_CAMEL_CASE;
+            // Consecutive
             if (prev_matched) score += BONUS_CONSECUTIVE;
 
             prev_matched = true;
@@ -118,13 +158,24 @@ fn toLower(c: u8) u8 {
     return c;
 }
 
-/// Rank items by fuzzy match score. Returns indices sorted by score descending.
+fn eqlInsensitive(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        if (toLower(ca) != toLower(cb)) return false;
+    }
+    return true;
+}
+
+/// Rank items by fuzzy match score. Returns indices sorted by score
+/// descending. Applies a minimum score threshold to filter out weak matches.
 pub fn rank(allocator: std.mem.Allocator, items: []const []const u8, query: []const u8) ![]usize {
     if (query.len == 0) {
         const indices = try allocator.alloc(usize, items.len);
         for (indices, 0..) |*idx, i| idx.* = i;
         return indices;
     }
+
+    const threshold = scoreThreshold(query.len);
 
     const ScoredIndex = struct { index: usize, score: i32 };
     var scored: std.ArrayList(ScoredIndex) = .{};
@@ -133,7 +184,9 @@ pub fn rank(allocator: std.mem.Allocator, items: []const []const u8, query: []co
     for (items, 0..) |item, i| {
         if (try match(allocator, item, query)) |m| {
             defer m.deinit(allocator);
-            try scored.append(allocator, .{ .index = i, .score = m.score });
+            if (m.score >= threshold) {
+                try scored.append(allocator, .{ .index = i, .score = m.score });
+            }
         }
     }
 
@@ -146,7 +199,23 @@ pub fn rank(allocator: std.mem.Allocator, items: []const []const u8, query: []co
         }
     }.lessThan);
 
-    const result = try allocator.alloc(usize, slice.len);
+    // Secondary cutoff: if best score is much higher than tail, trim.
+    // Drop results scoring below 30% of the best score.
+    var keep: usize = slice.len;
+    if (slice.len > 1) {
+        const best = slice[0].score;
+        if (best > 0) {
+            const cutoff = @divTrunc(best * 30, 100);
+            for (slice, 0..) |entry, i| {
+                if (entry.score < cutoff) {
+                    keep = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    const result = try allocator.alloc(usize, keep);
     for (result, 0..) |*r, i| r.* = slice[i].index;
     return result;
 }
@@ -162,8 +231,7 @@ test "exact match scores higher than partial" {
     const m2 = (try match(gpa, "docker-build-cache", "docker-build")).?;
     defer m2.deinit(gpa);
 
-    // Both start at the same position, so scores are equal or m1 >= m2
-    try std.testing.expect(m1.score >= m2.score);
+    try std.testing.expect(m1.score > m2.score);
 }
 
 test "no match returns null" {
@@ -193,4 +261,48 @@ test "rank orders by score" {
     defer gpa.free(result);
 
     try std.testing.expect(result.len == 3);
+}
+
+test "scattered match scores below threshold" {
+    const gpa = std.testing.allocator;
+    // "Test" scattered across "list-servers-tool" should score low
+    const m = try match(gpa, "list-servers-tool", "Test");
+    if (m) |mt| {
+        defer mt.deinit(gpa);
+        const threshold = scoreThreshold(4);
+        // Should be below threshold
+        try std.testing.expect(mt.score < threshold);
+    }
+    // null is also acceptable — means no match at all
+}
+
+test "exact name match scores much higher than scattered" {
+    const gpa = std.testing.allocator;
+
+    const m_exact = (try match(gpa, "Test", "Test")).?;
+    defer m_exact.deinit(gpa);
+
+    const m_scattered = try match(gpa, "list-servers-tool", "Test");
+    if (m_scattered) |ms| {
+        defer ms.deinit(gpa);
+        // Exact should be at least 3x higher
+        try std.testing.expect(m_exact.score > ms.score * 3);
+    }
+}
+
+test "rank filters out weak matches" {
+    const gpa = std.testing.allocator;
+    const items = [_][]const u8{
+        "Test",
+        "Test-server",
+        "run-test",
+        "list-servers-tool",
+        "my-templates",
+        "git-stash",
+    };
+    const result = try rank(gpa, &items, "Test");
+    defer gpa.free(result);
+
+    // Should NOT return all 6 — scattered junk should be filtered
+    try std.testing.expect(result.len <= 4);
 }

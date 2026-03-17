@@ -22,6 +22,16 @@ fn printOut(alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) v
     writeOut(s);
 }
 
+fn eqlInsensitive(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        const la: u8 = if (ca >= 'A' and ca <= 'Z') ca + 32 else ca;
+        const lb: u8 = if (cb >= 'A' and cb <= 'Z') cb + 32 else cb;
+        if (la != lb) return false;
+    }
+    return true;
+}
+
 fn readLine(buf: []u8) ?[]const u8 {
     const f = std.fs.File.stdin();
     var read_buf: [1]u8 = undefined;
@@ -194,6 +204,21 @@ fn cmdRun(allocator: std.mem.Allocator, args: []const []const u8, snip_store: *s
     }
 
     const query = args[0];
+
+    // Fast path: exact name match → run directly, no fuzzy needed
+    for (snip_store.snippets.items) |*snip| {
+        if (eqlInsensitive(snip.name, query)) {
+            const result = try executor.execute(allocator, snip, cfg);
+            defer result.deinit();
+            if (result.stdout.len > 0) writeOut(result.stdout);
+            if (result.stderr.len > 0) writeErr(result.stderr);
+            if (result.exit_code != 0) {
+                printOut(allocator, "\n\x1b[31mExit code: {d}\x1b[0m\n", .{result.exit_code});
+            }
+            return;
+        }
+    }
+
     const results = try snip_store.search(allocator, query);
     defer allocator.free(results);
 
