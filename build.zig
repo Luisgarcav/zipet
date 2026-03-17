@@ -4,11 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Fetch libvaxis dependency
+    const vaxis_dep = b.dependency("vaxis", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    mod.addImport("vaxis", vaxis_dep.module("vaxis"));
 
     // Main executable
     const exe = b.addExecutable(.{
@@ -32,6 +39,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    test_mod.addImport("vaxis", vaxis_dep.module("vaxis"));
 
     const unit_tests = b.addTest(.{
         .root_module = test_mod,

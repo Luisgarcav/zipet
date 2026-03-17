@@ -77,6 +77,17 @@ pub const Color = enum {
     }
 };
 
+fn colorFromString(s: []const u8) Color {
+    if (std.mem.eql(u8, s, "cyan")) return .cyan;
+    if (std.mem.eql(u8, s, "green")) return .green;
+    if (std.mem.eql(u8, s, "yellow")) return .yellow;
+    if (std.mem.eql(u8, s, "magenta")) return .magenta;
+    if (std.mem.eql(u8, s, "red")) return .red;
+    if (std.mem.eql(u8, s, "blue")) return .blue;
+    if (std.mem.eql(u8, s, "white")) return .white;
+    return .cyan;
+}
+
 pub fn load(allocator: std.mem.Allocator) !Config {
     var cfg = Config.default();
 
@@ -111,8 +122,37 @@ pub fn load(allocator: std.mem.Allocator) !Config {
 
     const content = try file.readToEndAlloc(allocator, 1024 * 64);
     defer allocator.free(content);
-    // TODO: parse TOML config when toml parser handles full spec
-    // For now, defaults are used
+
+    // Parse config TOML
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const table = toml.parse(arena_alloc, content) catch return cfg;
+
+    // [general] section
+    if (table.getString("general.accent_color")) |color_str| {
+        cfg.accent_color = colorFromString(color_str);
+    }
+    if (table.get("general.preview")) |v| {
+        switch (v) {
+            .boolean => |b| cfg.preview_enabled = b,
+            else => {},
+        }
+    }
+
+    // [shell] section
+    if (table.getString("shell.shell")) |s| {
+        cfg.shell = s;
+        // Note: s points into arena memory which will be freed,
+        // but cfg.shell is only used during this process lifetime
+        // and the env var fallback above already set it if available.
+        // We need to dupe to survive arena deinit.
+        cfg.shell = allocator.dupe(u8, s) catch cfg.shell;
+    }
+    if (table.getString("shell.editor")) |e| {
+        cfg.editor = allocator.dupe(u8, e) catch cfg.editor;
+    }
 
     return cfg;
 }

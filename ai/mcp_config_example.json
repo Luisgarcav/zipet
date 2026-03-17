@@ -1,0 +1,62 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/servers/main/schema.json",
+  "_comment": "Ejemplo de configuración MCP para diferentes clientes de IA — uv maneja Python",
+
+  "claude_desktop": {
+    "mcpServers": {
+      "zipet": {
+        "command": "uv",
+        "args": ["run", "--project", "/path/to/zipet/ai", "python", "server.py"],
+        "env": {
+          "ZIPET_SAFETY_MODE": "confirm",
+          "ZIPET_BIN": "zipet",
+          "ZIPET_ALLOWED_TAGS": "*",
+          "ZIPET_DENY_COMMANDS": "rm -rf /,mkfs,dd if="
+        }
+      }
+    }
+  },
+
+  "cursor": {
+    "mcpServers": {
+      "zipet": {
+        "command": "uv",
+        "args": ["run", "--project", "/path/to/zipet/ai", "python", "server.py"],
+        "env": {
+          "ZIPET_SAFETY_MODE": "confirm"
+        }
+      }
+    }
+  },
+
+  "pi_coding_agent": {
+    "_comment": "Para usar con pi como extensión MCP",
+    "mcpServers": {
+      "zipet": {
+        "command": "uv",
+        "args": ["run", "--project", "/path/to/zipet/ai", "python", "server.py"],
+        "env": {
+          "ZIPET_SAFETY_MODE": "open"
+        }
+      }
+    }
+  },
+
+  "safety_profiles": {
+    "development": {
+      "ZIPET_SAFETY_MODE": "open",
+      "ZIPET_ALLOWED_TAGS": "*",
+      "_comment": "Para desarrollo local, confiamos en el agente"
+    },
+    "production": {
+      "ZIPET_SAFETY_MODE": "confirm",
+      "ZIPET_ALLOWED_TAGS": "sysadmin,monitoring,docker",
+      "ZIPET_DENY_COMMANDS": "rm -rf,mkfs,dd if=,shutdown,reboot",
+      "_comment": "Para servidores, solo tags seguros y con confirmación"
+    },
+    "readonly": {
+      "ZIPET_SAFETY_MODE": "dry-run",
+      "_comment": "Solo preview, nunca ejecuta — para demos y auditoría"
+    }
+  }
+}

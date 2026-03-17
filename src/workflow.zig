@@ -93,6 +93,124 @@ fn readLine(buf: []u8) ?[]const u8 {
     return std.mem.trim(u8, buf[0..i], " \t\r");
 }
 
+/// Execute a workflow silently (no stdout/prompts) with pre-supplied param values.
+/// Returns the WorkflowResult. Output is collected in step_results.
+pub fn executeSilent(
+    allocator: std.mem.Allocator,
+    wf: *const Workflow,
+    snip_store: *store.Store,
+    param_keys: []const []const u8,
+    param_values_in: []const []const u8,
+) !WorkflowResult {
+    var step_results: std.ArrayList(StepResult) = .{};
+    var prev_stdout: []const u8 = "";
+    var prev_exit: u8 = 0;
+    var all_success = true;
+    var prev_stdout_owned = false;
+
+    defer {
+        if (prev_stdout_owned) allocator.free(prev_stdout);
+    }
+
+    for (wf.steps) |step| {
+        const raw_cmd = blk: {
+            if (step.cmd) |cmd| {
+                break :blk cmd;
+            } else if (step.snippet_ref) |ref| {
+                const snip = findSnippet(snip_store, ref);
+                if (snip) |s| {
+                    break :blk s.cmd;
+                } else {
+                    try step_results.append(allocator, .{
+                        .step_name = step.name,
+                        .exit_code = 1,
+                        .stdout = try allocator.dupe(u8, ""),
+                        .stderr = try allocator.dupe(u8, "snippet not found"),
+                        .skipped = true,
+                    });
+                    all_success = false;
+                    switch (step.on_fail) {
+                        .stop, .skip_rest => break,
+                        .@"continue" => continue,
+                    }
+                }
+            } else {
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 1,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, "no command"),
+                    .skipped = true,
+                });
+                continue;
+            }
+        };
+
+        const extra_count: usize = 2;
+        const override_count = step.param_overrides.len;
+        const total_k = param_keys.len + extra_count + override_count;
+
+        var all_keys = try allocator.alloc([]const u8, total_k);
+        defer allocator.free(all_keys);
+        var all_vals = try allocator.alloc([]const u8, total_k);
+        defer {
+            allocator.free(all_vals[param_keys.len]);
+            allocator.free(all_vals[param_keys.len + 1]);
+            for (param_keys.len + extra_count..total_k) |oi| allocator.free(all_vals[oi]);
+            allocator.free(all_vals);
+        }
+
+        for (0..param_keys.len) |pi| {
+            all_keys[pi] = param_keys[pi];
+            all_vals[pi] = param_values_in[pi];
+        }
+
+        all_keys[param_keys.len] = "prev_stdout";
+        all_vals[param_keys.len] = try allocator.dupe(u8, prev_stdout);
+        all_keys[param_keys.len + 1] = "prev_exit";
+        all_vals[param_keys.len + 1] = try std.fmt.allocPrint(allocator, "{d}", .{prev_exit});
+
+        for (step.param_overrides, 0..) |ov, oi| {
+            all_keys[param_keys.len + extra_count + oi] = ov.key;
+            all_vals[param_keys.len + extra_count + oi] = try allocator.dupe(u8, ov.value);
+        }
+
+        const rendered = try template.render(allocator, raw_cmd, all_keys, all_vals);
+        defer allocator.free(rendered);
+
+        const result = try executor.run(allocator, rendered);
+
+        const step_success = result.exit_code == 0;
+        if (!step_success) all_success = false;
+
+        if (prev_stdout_owned) allocator.free(prev_stdout);
+        prev_stdout = try allocator.dupe(u8, std.mem.trim(u8, result.stdout, "\n\r"));
+        prev_stdout_owned = true;
+        prev_exit = result.exit_code;
+
+        try step_results.append(allocator, .{
+            .step_name = step.name,
+            .exit_code = result.exit_code,
+            .stdout = result.stdout,
+            .stderr = result.stderr,
+            .skipped = false,
+        });
+
+        if (!step_success) {
+            switch (step.on_fail) {
+                .stop, .skip_rest => break,
+                .@"continue" => {},
+            }
+        }
+    }
+
+    return WorkflowResult{
+        .step_results = try step_results.toOwnedSlice(allocator),
+        .success = all_success,
+        .allocator = allocator,
+    };
+}
+
 /// Execute a complete workflow, prompting for params and running each step in order.
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -661,6 +779,118 @@ pub fn saveWorkflow(allocator: std.mem.Allocator, wf: *const Workflow, cfg: conf
     const file = try std.fs.createFileAbsolute(path, .{});
     defer file.close();
     try file.writeAll(buf.items);
+}
+
+/// Execute multiple workflows in parallel.
+/// Each workflow runs with pre-supplied param values (no interactive prompts).
+pub fn executeParallel(
+    allocator: std.mem.Allocator,
+    workflows: []const ParallelWorkflowItem,
+    snip_store: *store.Store,
+) ![]ParallelWorkflowResult {
+    if (workflows.len == 0) {
+        return try allocator.alloc(ParallelWorkflowResult, 0);
+    }
+
+    // Build parallel items — render each workflow into a compound shell command
+    var items = try allocator.alloc(executor.ParallelItem, workflows.len);
+    defer {
+        for (items) |item| allocator.free(item.cmd);
+        allocator.free(items);
+    }
+
+    for (workflows, 0..) |pw, i| {
+        const wf = pw.workflow;
+
+        // Build a single shell script that runs all steps sequentially
+        var script_buf: std.ArrayList(u8) = .{};
+        const writer = script_buf.writer(allocator);
+        try writer.writeAll("set -e\n");
+
+        const prev_stdout_val: []const u8 = "";
+        const prev_exit_val: []const u8 = "0";
+
+        for (wf.steps) |step_item| {
+            const raw_cmd = blk: {
+                if (step_item.cmd) |cmd| break :blk cmd;
+                if (step_item.snippet_ref) |ref| {
+                    if (findSnippet(snip_store, ref)) |s| break :blk s.cmd;
+                }
+                continue;
+            };
+
+            // Build keys/vals for template rendering
+            const extra: usize = 2;
+            const total = pw.param_keys.len + extra;
+            var keys = try allocator.alloc([]const u8, total);
+            defer allocator.free(keys);
+            var vals = try allocator.alloc([]const u8, total);
+            defer {
+                allocator.free(vals[pw.param_keys.len]);
+                allocator.free(vals[pw.param_keys.len + 1]);
+                allocator.free(vals);
+            }
+
+            for (0..pw.param_keys.len) |pi| {
+                keys[pi] = pw.param_keys[pi];
+                vals[pi] = pw.param_values[pi];
+            }
+            keys[pw.param_keys.len] = "prev_stdout";
+            vals[pw.param_keys.len] = try allocator.dupe(u8, prev_stdout_val);
+            keys[pw.param_keys.len + 1] = "prev_exit";
+            vals[pw.param_keys.len + 1] = try allocator.dupe(u8, prev_exit_val);
+
+            const rendered = try template.render(allocator, raw_cmd, keys, vals);
+            defer allocator.free(rendered);
+
+            try writer.print("{s}\n", .{rendered});
+        }
+
+        items[i] = .{
+            .name = wf.name,
+            .cmd = try script_buf.toOwnedSlice(allocator),
+        };
+    }
+
+    const exec_results = try executor.runParallel(allocator, items);
+    defer allocator.free(exec_results);
+
+    var results = try allocator.alloc(ParallelWorkflowResult, workflows.len);
+    for (exec_results, 0..) |er, i| {
+        results[i] = .{
+            .name = er.name,
+            .success = er.exit_code == 0 and !er.err,
+            .exit_code = er.exit_code,
+            .stdout = if (!er.err) er.stdout else try allocator.dupe(u8, ""),
+            .stderr = if (!er.err) er.stderr else try allocator.dupe(u8, "execution error"),
+            .duration_ms = er.duration_ms,
+        };
+    }
+
+    return results;
+}
+
+pub const ParallelWorkflowItem = struct {
+    workflow: *const Workflow,
+    param_keys: []const []const u8,
+    param_values: []const []const u8,
+};
+
+pub const ParallelWorkflowResult = struct {
+    name: []const u8,
+    success: bool,
+    exit_code: u8,
+    stdout: []const u8,
+    stderr: []const u8,
+    duration_ms: u64,
+};
+
+pub fn freeParallelWorkflowResults(allocator: std.mem.Allocator, results: []ParallelWorkflowResult) void {
+    for (results) |r| {
+        allocator.free(r.stdout);
+        allocator.free(r.stderr);
+    }
+    allocator.free(results);
 }
 
 test "workflow basic" {

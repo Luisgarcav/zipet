@@ -192,3 +192,128 @@ pub fn execForeground(cmd: []const u8) !u8 {
     const term = try child.spawnAndWait();
     return term.Exited;
 }
+
+// ── Parallel execution ──
+
+pub const ParallelItem = struct {
+    name: []const u8,
+    cmd: []const u8,
+};
+
+pub const ParallelResult = struct {
+    name: []const u8,
+    exit_code: u8,
+    stdout: []const u8,
+    stderr: []const u8,
+    duration_ms: u64,
+    err: bool,
+};
+
+const ThreadContext = struct {
+    item: ParallelItem,
+    allocator: std.mem.Allocator,
+    result: ParallelResult,
+};
+
+fn parallelWorker(ctx: *ThreadContext) void {
+    var timer = std.time.Timer.start() catch {
+        ctx.result = .{
+            .name = ctx.item.name,
+            .exit_code = 1,
+            .stdout = "",
+            .stderr = "",
+            .duration_ms = 0,
+            .err = true,
+        };
+        return;
+    };
+
+    const result = std.process.Child.run(.{
+        .allocator = ctx.allocator,
+        .argv = &.{ "/bin/sh", "-c", ctx.item.cmd },
+    }) catch {
+        ctx.result = .{
+            .name = ctx.item.name,
+            .exit_code = 1,
+            .stdout = "",
+            .stderr = "",
+            .duration_ms = timer.read() / std.time.ns_per_ms,
+            .err = true,
+        };
+        return;
+    };
+
+    ctx.result = .{
+        .name = ctx.item.name,
+        .exit_code = result.term.Exited,
+        .stdout = result.stdout,
+        .stderr = result.stderr,
+        .duration_ms = timer.read() / std.time.ns_per_ms,
+        .err = false,
+    };
+}
+
+/// Run multiple commands in parallel using threads.
+/// Returns results in the same order as the input items.
+pub fn runParallel(allocator: std.mem.Allocator, items: []const ParallelItem) ![]ParallelResult {
+    if (items.len == 0) {
+        return try allocator.alloc(ParallelResult, 0);
+    }
+
+    // Single item — just run it directly
+    if (items.len == 1) {
+        const results = try allocator.alloc(ParallelResult, 1);
+        var ctx = ThreadContext{
+            .item = items[0],
+            .allocator = allocator,
+            .result = undefined,
+        };
+        parallelWorker(&ctx);
+        results[0] = ctx.result;
+        return results;
+    }
+
+    // Allocate thread contexts
+    var contexts = try allocator.alloc(ThreadContext, items.len);
+    defer allocator.free(contexts);
+
+    for (items, 0..) |item, i| {
+        contexts[i] = .{
+            .item = item,
+            .allocator = allocator,
+            .result = undefined,
+        };
+    }
+
+    // Spawn threads
+    var threads = try allocator.alloc(std.Thread, items.len);
+    defer allocator.free(threads);
+
+    for (0..items.len) |i| {
+        threads[i] = try std.Thread.spawn(.{}, parallelWorker, .{&contexts[i]});
+    }
+
+    // Wait for all threads
+    for (threads) |t| {
+        t.join();
+    }
+
+    // Collect results
+    const results = try allocator.alloc(ParallelResult, items.len);
+    for (0..items.len) |i| {
+        results[i] = contexts[i].result;
+    }
+
+    return results;
+}
+
+/// Free results from runParallel
+pub fn freeParallelResults(allocator: std.mem.Allocator, results: []ParallelResult) void {
+    for (results) |r| {
+        if (!r.err) {
+            allocator.free(r.stdout);
+            allocator.free(r.stderr);
+        }
+    }
+    allocator.free(results);
+}

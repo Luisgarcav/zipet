@@ -5,6 +5,8 @@ const config = @import("config.zig");
 const executor = @import("executor.zig");
 const template = @import("template.zig");
 const workflow = @import("workflow.zig");
+const pack = @import("pack.zig");
+const workspace_mod = @import("workspace.zig");
 
 fn writeOut(data: []const u8) void {
     std.fs.File.stdout().writeAll(data) catch {};
@@ -53,14 +55,22 @@ pub fn dispatch(allocator: std.mem.Allocator, args: []const []const u8, snip_sto
         try cmdEdit(allocator, args[1..], snip_store, cfg);
     } else if (std.mem.eql(u8, cmd, "workflow") or std.mem.eql(u8, cmd, "wf")) {
         try cmdWorkflow(allocator, args[1..], snip_store, cfg);
+    } else if (std.mem.eql(u8, cmd, "parallel") or std.mem.eql(u8, cmd, "par")) {
+        try cmdParallel(allocator, args[1..], snip_store, cfg);
     } else if (std.mem.eql(u8, cmd, "init")) {
         try cmdInit(allocator, cfg);
     } else if (std.mem.eql(u8, cmd, "shell")) {
         try cmdShell(args[1..]);
+    } else if (std.mem.eql(u8, cmd, "pack")) {
+        try cmdPack(allocator, args[1..], snip_store, cfg);
+    } else if (std.mem.eql(u8, cmd, "workspace") or std.mem.eql(u8, cmd, "ws")) {
+        try cmdWorkspace(allocator, args[1..], cfg);
     } else if (std.mem.eql(u8, cmd, "history")) {
         writeOut("History not yet implemented (requires SQLite)\n");
     } else if (std.mem.eql(u8, cmd, "export")) {
-        try cmdExport(snip_store);
+        try cmdExport(allocator, snip_store, args[1..]);
+    } else if (std.mem.eql(u8, cmd, "import")) {
+        try cmdImport(allocator, args[1..], snip_store, cfg);
     } else if (std.mem.eql(u8, cmd, "help") or std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h")) {
         printHelp();
     } else if (std.mem.eql(u8, cmd, "version") or std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
@@ -509,21 +519,255 @@ fn cmdShell(args: []const []const u8) !void {
     }
 }
 
-fn cmdExport(snip_store: *store.Store) !void {
-    const alloc = std.heap.page_allocator;
-    for (snip_store.snippets.items) |snip| {
-        printOut(alloc, "[snippets.{s}]\n", .{snip.name});
-        printOut(alloc, "desc = \"{s}\"\n", .{snip.desc});
-        writeOut("tags = [");
-        for (snip.tags, 0..) |tag, i| {
-            if (i > 0) writeOut(", ");
-            writeOut("\"");
-            writeOut(tag);
-            writeOut("\"");
-        }
-        writeOut("]\n");
-        printOut(alloc, "cmd = \"{s}\"\n\n", .{snip.cmd});
+fn cmdExport(allocator: std.mem.Allocator, snip_store: *store.Store, args: []const []const u8) !void {
+    var format: enum { toml_fmt, json } = .toml_fmt;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--json")) format = .json;
     }
+
+    switch (format) {
+        .json => {
+            writeOut("[\n");
+            for (snip_store.snippets.items, 0..) |snip, si| {
+                if (snip.kind == .workflow) continue;
+                if (si > 0) writeOut(",\n");
+                writeOut("  {\n");
+                printOut(allocator, "    \"name\": \"{s}\",\n", .{snip.name});
+                printOut(allocator, "    \"desc\": \"{s}\",\n", .{snip.desc});
+                printOut(allocator, "    \"cmd\": \"{s}\",\n", .{snip.cmd});
+                printOut(allocator, "    \"namespace\": \"{s}\",\n", .{snip.namespace});
+                writeOut("    \"tags\": [");
+                for (snip.tags, 0..) |tag, i| {
+                    if (i > 0) writeOut(", ");
+                    writeOut("\"");
+                    writeOut(tag);
+                    writeOut("\"");
+                }
+                writeOut("]\n");
+                writeOut("  }");
+            }
+            writeOut("\n]\n");
+        },
+        .toml_fmt => {
+            for (snip_store.snippets.items) |snip| {
+                if (snip.kind == .workflow) continue;
+                printOut(allocator, "[snippets.{s}]\n", .{snip.name});
+                printOut(allocator, "desc = \"{s}\"\n", .{snip.desc});
+                writeOut("tags = [");
+                for (snip.tags, 0..) |tag, i| {
+                    if (i > 0) writeOut(", ");
+                    writeOut("\"");
+                    writeOut(tag);
+                    writeOut("\"");
+                }
+                writeOut("]\n");
+                printOut(allocator, "cmd = \"{s}\"\n", .{snip.cmd});
+
+                if (snip.params.len > 0) {
+                    for (snip.params) |p| {
+                        printOut(allocator, "\n[snippets.{s}.params.{s}]\n", .{ snip.name, p.name });
+                        if (p.prompt) |pr| printOut(allocator, "prompt = \"{s}\"\n", .{pr});
+                        if (p.default) |d| printOut(allocator, "default = \"{s}\"\n", .{d});
+                        if (p.command) |c| printOut(allocator, "command = \"{s}\"\n", .{c});
+                    }
+                }
+                writeOut("\n");
+            }
+        },
+    }
+}
+
+fn cmdImport(allocator: std.mem.Allocator, args: []const []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    _ = cfg;
+    if (args.len == 0) {
+        writeOut("Usage: zipet import <file>\n");
+        writeOut("  Supports .toml snippet files\n");
+        return;
+    }
+
+    const path = args[0];
+
+    // Check if it's a URL (starts with http:// or https://)
+    if (std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://")) {
+        // Download with curl
+        const result = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{ "curl", "-sfL", path },
+        }) catch {
+            writeOut("Failed to download URL (is curl installed?)\n");
+            return;
+        };
+        defer allocator.free(result.stderr);
+        defer allocator.free(result.stdout);
+
+        if (result.term.Exited != 0) {
+            writeOut("Failed to download: ");
+            writeOut(path);
+            writeOut("\n");
+            return;
+        }
+
+        const count = importTomlContent(allocator, result.stdout, "imported", snip_store) catch {
+            writeOut("Failed to parse downloaded content\n");
+            return;
+        };
+        printOut(allocator, "✓ Imported {d} snippet(s) from URL\n", .{count});
+        return;
+    }
+
+    // Local file
+    const file = std.fs.cwd().openFile(path, .{}) catch {
+        // Try absolute path
+        const abs_file = std.fs.openFileAbsolute(path, .{}) catch {
+            writeOut("File not found: ");
+            writeOut(path);
+            writeOut("\n");
+            return;
+        };
+        defer abs_file.close();
+        const content = abs_file.readToEndAlloc(allocator, 1024 * 256) catch {
+            writeOut("Failed to read file\n");
+            return;
+        };
+        defer allocator.free(content);
+
+        const count = importTomlContent(allocator, content, "imported", snip_store) catch {
+            writeOut("Failed to parse file\n");
+            return;
+        };
+        printOut(allocator, "✓ Imported {d} snippet(s) from {s}\n", .{ count, path });
+        return;
+    };
+    defer file.close();
+
+    const content = file.readToEndAlloc(allocator, 1024 * 256) catch {
+        writeOut("Failed to read file\n");
+        return;
+    };
+    defer allocator.free(content);
+
+    // Derive namespace from filename
+    const basename = std.fs.path.basename(path);
+    const namespace = if (std.mem.endsWith(u8, basename, ".toml"))
+        basename[0 .. basename.len - 5]
+    else
+        basename;
+
+    const count = importTomlContent(allocator, content, namespace, snip_store) catch {
+        writeOut("Failed to parse file\n");
+        return;
+    };
+    printOut(allocator, "✓ Imported {d} snippet(s) from {s}\n", .{ count, path });
+}
+
+fn importTomlContent(allocator: std.mem.Allocator, content: []const u8, namespace: []const u8, snip_store: *store.Store) !usize {
+    const toml_mod = @import("toml.zig");
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const table = try toml_mod.parse(arena_alloc, content);
+
+    // Collect snippet names
+    var snippet_names = std.StringHashMap(void).init(allocator);
+    defer {
+        var key_iter = snippet_names.keyIterator();
+        while (key_iter.next()) |k| allocator.free(k.*);
+        snippet_names.deinit();
+    }
+
+    for (table.keys) |key| {
+        if (std.mem.startsWith(u8, key, "snippets.")) {
+            const rest = key["snippets.".len..];
+            if (std.mem.indexOfScalar(u8, rest, '.')) |dot| {
+                const name = rest[0..dot];
+                if (!snippet_names.contains(name)) {
+                    try snippet_names.put(try allocator.dupe(u8, name), {});
+                }
+            }
+        }
+    }
+
+    var count: usize = 0;
+    var name_iter = snippet_names.keyIterator();
+    while (name_iter.next()) |name_ptr| {
+        const sname = name_ptr.*;
+
+        const cmd_key = try std.fmt.allocPrint(allocator, "snippets.{s}.cmd", .{sname});
+        defer allocator.free(cmd_key);
+        const desc_key = try std.fmt.allocPrint(allocator, "snippets.{s}.desc", .{sname});
+        defer allocator.free(desc_key);
+        const tags_key = try std.fmt.allocPrint(allocator, "snippets.{s}.tags", .{sname});
+        defer allocator.free(tags_key);
+
+        const cmd_val = table.getString(cmd_key) orelse continue;
+        const desc_val = table.getString(desc_key) orelse "";
+
+        var tags: std.ArrayList([]const u8) = .{};
+        if (table.getArray(tags_key)) |arr| {
+            for (arr) |item| {
+                switch (item) {
+                    .string => |s| try tags.append(allocator, try allocator.dupe(u8, s)),
+                    else => {},
+                }
+            }
+        }
+
+        // Check for duplicate name
+        var duplicate = false;
+        for (snip_store.snippets.items) |existing| {
+            if (std.mem.eql(u8, existing.name, sname)) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            printOut(allocator, "  ⚠ Skipping '{s}' (already exists)\n", .{sname});
+            for (tags.items) |t| allocator.free(t);
+            tags.deinit(allocator);
+            continue;
+        }
+
+        const detected = try template.detectParams(allocator, cmd_val);
+        defer allocator.free(detected);
+        const params = try allocator.alloc(template.Param, detected.len);
+        for (detected, 0..) |pname, i| {
+            params[i] = .{ .name = pname, .prompt = null, .default = null, .options = null, .command = null };
+
+            const param_prefix = try std.fmt.allocPrint(allocator, "snippets.{s}.params.{s}", .{ sname, pname });
+            defer allocator.free(param_prefix);
+
+            for (table.keys, table.values) |tk, tv| {
+                if (std.mem.eql(u8, tk, param_prefix)) {
+                    switch (tv) {
+                        .table => |pt| {
+                            if (pt.getString("prompt")) |pr| params[i].prompt = try allocator.dupe(u8, pr);
+                            if (pt.getString("default")) |d| params[i].default = try allocator.dupe(u8, d);
+                            if (pt.getString("command")) |c| params[i].command = try allocator.dupe(u8, c);
+                        },
+                        else => {},
+                    }
+                }
+            }
+        }
+
+        const snippet = store.Snippet{
+            .name = try allocator.dupe(u8, sname),
+            .desc = try allocator.dupe(u8, desc_val),
+            .cmd = try allocator.dupe(u8, cmd_val),
+            .tags = try tags.toOwnedSlice(allocator),
+            .params = params,
+            .namespace = try allocator.dupe(u8, namespace),
+            .kind = .snippet,
+        };
+
+        try snip_store.add(snippet);
+        printOut(allocator, "  + {s}\n", .{sname});
+        count += 1;
+    }
+
+    return count;
 }
 
 fn cmdWorkflow(allocator: std.mem.Allocator, args: []const []const u8, snip_store: *store.Store, cfg: config.Config) !void {
@@ -872,6 +1116,491 @@ fn cmdWorkflowEdit(allocator: std.mem.Allocator, name: []const u8, snip_store: *
     writeOut("' not found\n");
 }
 
+fn cmdParallel(allocator: std.mem.Allocator, args: []const []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    _ = cfg;
+
+    if (args.len == 0) {
+        writeOut("Usage: zipet parallel <name1> <name2> ... [-- key=val ...]\n");
+        writeOut("  Run multiple snippets/workflows in parallel\n\n");
+        writeOut("Examples:\n");
+        writeOut("  zipet parallel check-disk check-mem check-net\n");
+        writeOut("  zipet par deploy-api deploy-web -- env=prod\n");
+        return;
+    }
+
+    // Separate snippet/workflow names from param overrides (after --)
+    var names: std.ArrayList([]const u8) = .{};
+    defer names.deinit(allocator);
+    var param_keys_list: std.ArrayList([]const u8) = .{};
+    defer param_keys_list.deinit(allocator);
+    var param_vals_list: std.ArrayList([]const u8) = .{};
+    defer param_vals_list.deinit(allocator);
+
+    var after_separator = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--")) {
+            after_separator = true;
+            continue;
+        }
+        if (after_separator) {
+            // Parse key=value
+            if (std.mem.indexOfScalar(u8, arg, '=')) |eq| {
+                try param_keys_list.append(allocator, arg[0..eq]);
+                try param_vals_list.append(allocator, arg[eq + 1 ..]);
+            }
+        } else {
+            try names.append(allocator, arg);
+        }
+    }
+
+    if (names.items.len == 0) {
+        writeOut("No snippets/workflows specified\n");
+        return;
+    }
+
+    // Resolve each name to a snippet or workflow
+    var parallel_items: std.ArrayList(executor.ParallelItem) = .{};
+    defer parallel_items.deinit(allocator);
+    var wf_items: std.ArrayList(workflow.ParallelWorkflowItem) = .{};
+    defer wf_items.deinit(allocator);
+
+    var rendered_cmds: std.ArrayList([]const u8) = .{};
+    defer {
+        for (rendered_cmds.items) |c| allocator.free(c);
+        rendered_cmds.deinit(allocator);
+    }
+
+    var has_workflows = false;
+    var has_snippets = false;
+
+    for (names.items) |name| {
+        // Check if it's a workflow first
+        if (workflow.getWorkflow(allocator, name)) |wf| {
+            has_workflows = true;
+            try wf_items.append(allocator, .{
+                .workflow = wf,
+                .param_keys = param_keys_list.items,
+                .param_values = param_vals_list.items,
+            });
+            continue;
+        }
+
+        // Check if it's a snippet
+        var found = false;
+        for (snip_store.snippets.items) |*snip| {
+            if (snip.kind == .snippet and std.mem.eql(u8, snip.name, name)) {
+                found = true;
+                has_snippets = true;
+
+                // Render the command with provided params
+                const rendered = template.render(allocator, snip.cmd, param_keys_list.items, param_vals_list.items) catch |err| {
+                    printOut(allocator, "Error rendering '{s}': {}\n", .{ name, err });
+                    break;
+                };
+                try rendered_cmds.append(allocator, rendered);
+
+                try parallel_items.append(allocator, .{
+                    .name = snip.name,
+                    .cmd = rendered,
+                });
+                break;
+            }
+        }
+
+        if (!found and !has_workflows) {
+            printOut(allocator, "⚠ '{s}' not found, skipping\n", .{name});
+        }
+    }
+
+    const total = parallel_items.items.len + wf_items.items.len;
+    if (total == 0) {
+        writeOut("Nothing to run\n");
+        return;
+    }
+
+    printOut(allocator, "\n\x1b[1;36m▶ Running {d} item(s) in parallel\x1b[0m\n\n", .{total});
+
+    // Run snippets in parallel
+    if (has_snippets and parallel_items.items.len > 0) {
+        const results = try executor.runParallel(allocator, parallel_items.items);
+        defer executor.freeParallelResults(allocator, results);
+
+        for (results) |r| {
+            if (r.err) {
+                printOut(allocator, "\x1b[31m✗ {s}\x1b[0m — execution error\n", .{r.name});
+            } else if (r.exit_code == 0) {
+                printOut(allocator, "\x1b[32m✓ {s}\x1b[0m ({d}ms)\n", .{ r.name, r.duration_ms });
+            } else {
+                printOut(allocator, "\x1b[31m✗ {s}\x1b[0m exit={d} ({d}ms)\n", .{ r.name, r.exit_code, r.duration_ms });
+            }
+
+            if (r.stdout.len > 0) {
+                printOut(allocator, "  \x1b[2mstdout:\x1b[0m {s}", .{r.stdout});
+                if (r.stdout[r.stdout.len - 1] != '\n') writeOut("\n");
+            }
+            if (r.stderr.len > 0) {
+                printOut(allocator, "  \x1b[31mstderr:\x1b[0m {s}", .{r.stderr});
+                if (r.stderr[r.stderr.len - 1] != '\n') writeOut("\n");
+            }
+        }
+    }
+
+    // Run workflows in parallel
+    if (has_workflows and wf_items.items.len > 0) {
+        const wf_results = try workflow.executeParallel(allocator, wf_items.items, snip_store);
+        defer workflow.freeParallelWorkflowResults(allocator, wf_results);
+
+        for (wf_results) |r| {
+            if (r.success) {
+                printOut(allocator, "\x1b[32m✓ {s}\x1b[0m ({d}ms)\n", .{ r.name, r.duration_ms });
+            } else {
+                printOut(allocator, "\x1b[31m✗ {s}\x1b[0m exit={d} ({d}ms)\n", .{ r.name, r.exit_code, r.duration_ms });
+            }
+
+            if (r.stdout.len > 0) {
+                printOut(allocator, "  \x1b[2mstdout:\x1b[0m {s}", .{r.stdout});
+                if (r.stdout[r.stdout.len - 1] != '\n') writeOut("\n");
+            }
+            if (r.stderr.len > 0) {
+                printOut(allocator, "  \x1b[31mstderr:\x1b[0m {s}", .{r.stderr});
+                if (r.stderr[r.stderr.len - 1] != '\n') writeOut("\n");
+            }
+        }
+    }
+
+    // Summary
+    writeOut("\n\x1b[1;36m━━━ Parallel execution complete ━━━\x1b[0m\n");
+}
+
+// ── Pack commands ──
+fn cmdPack(allocator: std.mem.Allocator, args: []const []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    if (args.len == 0) {
+        writeOut("Usage: zipet pack <subcommand>\n\n");
+        writeOut("Subcommands:\n");
+        writeOut("  ls                 List available packs\n");
+        writeOut("  install <name>     Install a pack (name, file path, or URL)\n");
+        writeOut("  uninstall <name>   Remove an installed pack\n");
+        writeOut("  create <name>      Create a pack from your snippets\n");
+        writeOut("  info <name>        Show pack details\n");
+        writeOut("\nBuilt-in packs:\n");
+        writeOut("  pentesting         Nmap, gobuster, sqlmap, hydra, hashcat...\n");
+        writeOut("  devops             Docker, Kubernetes, deployment, monitoring\n");
+        writeOut("  git-power          Advanced Git workflows and shortcuts\n");
+        writeOut("  sysadmin           Linux system administration essentials\n");
+        writeOut("  web-dev            HTTP testing, API debugging, JWT, encoding\n");
+        return;
+    }
+
+    const sub = args[0];
+
+    if (std.mem.eql(u8, sub, "ls") or std.mem.eql(u8, sub, "list")) {
+        try cmdPackList(allocator, cfg);
+    } else if (std.mem.eql(u8, sub, "install")) {
+        if (args.len < 2) { writeOut("Usage: zipet pack install <name|file|url> [--workspace=<ws>]\n"); return; }
+        var target_ws: ?[]const u8 = null;
+        for (args[2..]) |arg| {
+            if (std.mem.startsWith(u8, arg, "--workspace=") or std.mem.startsWith(u8, arg, "--ws=")) {
+                target_ws = arg[std.mem.indexOf(u8, arg, "=").? + 1 ..];
+            }
+        }
+        try cmdPackInstall(allocator, args[1], target_ws, snip_store, cfg);
+    } else if (std.mem.eql(u8, sub, "uninstall") or std.mem.eql(u8, sub, "rm")) {
+        if (args.len < 2) { writeOut("Usage: zipet pack uninstall <name>\n"); return; }
+        try cmdPackUninstall(allocator, args[1], snip_store, cfg);
+    } else if (std.mem.eql(u8, sub, "create")) {
+        if (args.len < 2) { writeOut("Usage: zipet pack create <name> [--namespace=<ns>]\n"); return; }
+        try cmdPackCreate(allocator, args[1..], snip_store);
+    } else if (std.mem.eql(u8, sub, "info")) {
+        if (args.len < 2) { writeOut("Usage: zipet pack info <name>\n"); return; }
+        try cmdPackInfo(allocator, args[1], cfg);
+    } else {
+        printOut(allocator, "Unknown pack subcommand: {s}\n", .{sub});
+    }
+}
+
+fn cmdPackList(allocator: std.mem.Allocator, cfg: config.Config) !void {
+    const packs = try pack.listAvailable(allocator, cfg);
+    defer pack.freePackMetas(allocator, packs);
+
+    if (packs.len == 0) {
+        writeOut("No packs in registry.\n");
+        writeOut("Install built-in packs with: zipet pack install <name>\n");
+        writeOut("Available: pentesting, devops, git-power, sysadmin, web-dev\n");
+        return;
+    }
+
+    writeOut("\n\x1b[1;36m📦 Available Packs\x1b[0m\n\n");
+    for (packs) |p| {
+        const status = if (p.installed) "\x1b[32m✓\x1b[0m" else " ";
+        printOut(allocator, "  {s} \x1b[1m{s}\x1b[0m", .{ status, p.name });
+        const pad = if (p.name.len < 20) 20 - p.name.len else @as(usize, 1);
+        var i: usize = 0;
+        while (i < pad) : (i += 1) writeOut(" ");
+        printOut(allocator, "{s}\n", .{p.description});
+        printOut(allocator, "    \x1b[2m{s} • {s} • {d} snippets", .{ p.category, p.author, p.snippet_count });
+        if (p.workflow_count > 0) printOut(allocator, " • {d} workflows", .{p.workflow_count});
+        writeOut("\x1b[0m\n");
+    }
+    writeOut("\n");
+}
+
+fn cmdPackInstall(allocator: std.mem.Allocator, source: []const u8, target_ws: ?[]const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    printOut(allocator, "Installing pack '{s}'...\n", .{source});
+
+    const result = try pack.install(allocator, cfg, source, target_ws, snip_store);
+    defer pack.freeInstallResult(allocator, result);
+
+    if (result.err_msg) |err| {
+        printOut(allocator, "\x1b[31m✗ {s}\x1b[0m\n", .{err});
+        return;
+    }
+
+    printOut(allocator, "\x1b[32m✓ Pack '{s}' installed\x1b[0m\n", .{result.pack_name});
+    printOut(allocator, "  {d} snippet(s) added\n", .{result.snippets_added});
+    if (result.workflows_added > 0)
+        printOut(allocator, "  {d} workflow(s) added\n", .{result.workflows_added});
+    if (target_ws) |ws|
+        printOut(allocator, "  Target workspace: {s}\n", .{ws});
+}
+
+fn cmdPackUninstall(allocator: std.mem.Allocator, name: []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    const removed = try pack.uninstall(allocator, cfg, name, snip_store);
+    if (removed > 0) {
+        printOut(allocator, "\x1b[32m✓ Removed pack '{s}' ({d} items)\x1b[0m\n", .{ name, removed });
+    } else {
+        printOut(allocator, "Pack '{s}' not found or already uninstalled\n", .{name});
+    }
+}
+
+fn cmdPackCreate(allocator: std.mem.Allocator, args: []const []const u8, snip_store: *store.Store) !void {
+    const name = args[0];
+    var ns_filter: ?[]const u8 = null;
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "--namespace=") or std.mem.startsWith(u8, arg, "--ns=")) {
+            ns_filter = arg[std.mem.indexOf(u8, arg, "=").? + 1 ..];
+        }
+    }
+
+    writeOut("Description: ");
+    var desc_buf: [512]u8 = undefined;
+    const desc = readLine(&desc_buf) orelse return;
+
+    writeOut("Author: ");
+    var author_buf: [256]u8 = undefined;
+    const author = readLine(&author_buf) orelse return;
+
+    writeOut("Category [general]: ");
+    var cat_buf: [256]u8 = undefined;
+    const cat_input = readLine(&cat_buf) orelse return;
+    const category = if (cat_input.len > 0) cat_input else "general";
+
+    const output_file = try std.fmt.allocPrint(allocator, "{s}.toml", .{name});
+    defer allocator.free(output_file);
+
+    const count = try pack.createPack(allocator, name, desc, author, category, snip_store, ns_filter, output_file);
+    printOut(allocator, "\x1b[32m✓ Pack '{s}' created with {d} snippets → {s}\x1b[0m\n", .{ name, count, output_file });
+    writeOut("Share this file or publish it for others!\n");
+}
+
+fn cmdPackInfo(allocator: std.mem.Allocator, name: []const u8, cfg: config.Config) !void {
+    // Try to find pack in registry
+    const packs = try pack.listAvailable(allocator, cfg);
+    defer pack.freePackMetas(allocator, packs);
+
+    for (packs) |p| {
+        if (std.mem.eql(u8, p.name, name)) {
+            printOut(allocator, "\n\x1b[1;36m📦 {s}\x1b[0m", .{p.name});
+            if (p.installed) writeOut(" \x1b[32m(installed)\x1b[0m");
+            writeOut("\n\n");
+            printOut(allocator, "  Description:  {s}\n", .{p.description});
+            printOut(allocator, "  Author:       {s}\n", .{p.author});
+            printOut(allocator, "  Version:      {s}\n", .{p.version});
+            printOut(allocator, "  Category:     {s}\n", .{p.category});
+            printOut(allocator, "  Snippets:     {d}\n", .{p.snippet_count});
+            printOut(allocator, "  Workflows:    {d}\n", .{p.workflow_count});
+            if (p.tags.len > 0) {
+                writeOut("  Tags:         ");
+                for (p.tags, 0..) |tag, i| {
+                    if (i > 0) writeOut(", ");
+                    writeOut(tag);
+                }
+                writeOut("\n");
+            }
+            writeOut("\n");
+            return;
+        }
+    }
+    printOut(allocator, "Pack '{s}' not found in registry\n", .{name});
+}
+
+// ── Workspace commands ──
+fn cmdWorkspace(allocator: std.mem.Allocator, args: []const []const u8, cfg: config.Config) !void {
+    if (args.len == 0) {
+        writeOut("Usage: zipet workspace <subcommand>\n\n");
+        writeOut("Subcommands:\n");
+        writeOut("  ls               List all workspaces\n");
+        writeOut("  create <name>    Create a new workspace\n");
+        writeOut("  use <name>       Switch to a workspace\n");
+        writeOut("  use --global     Switch back to global (default)\n");
+        writeOut("  rm <name>        Delete a workspace\n");
+        writeOut("  current          Show active workspace\n");
+        writeOut("\nAliases: zipet ws\n");
+        return;
+    }
+
+    const sub = args[0];
+
+    if (std.mem.eql(u8, sub, "ls") or std.mem.eql(u8, sub, "list")) {
+        try cmdWorkspaceList(allocator, cfg);
+    } else if (std.mem.eql(u8, sub, "create") or std.mem.eql(u8, sub, "new")) {
+        if (args.len < 2) { writeOut("Usage: zipet workspace create <name> [--path=<dir>]\n"); return; }
+        try cmdWorkspaceCreate(allocator, args[1..], cfg);
+    } else if (std.mem.eql(u8, sub, "use") or std.mem.eql(u8, sub, "switch")) {
+        if (args.len < 2) { writeOut("Usage: zipet workspace use <name|--global>\n"); return; }
+        try cmdWorkspaceUse(allocator, args[1], cfg);
+    } else if (std.mem.eql(u8, sub, "rm") or std.mem.eql(u8, sub, "delete")) {
+        if (args.len < 2) { writeOut("Usage: zipet workspace rm <name>\n"); return; }
+        try cmdWorkspaceRemove(allocator, args[1], cfg);
+    } else if (std.mem.eql(u8, sub, "current") or std.mem.eql(u8, sub, "active")) {
+        try cmdWorkspaceCurrent(allocator, cfg);
+    } else {
+        printOut(allocator, "Unknown workspace subcommand: {s}\n", .{sub});
+    }
+}
+
+fn cmdWorkspaceList(allocator: std.mem.Allocator, cfg: config.Config) !void {
+    const workspaces = try workspace_mod.list(allocator, cfg);
+    defer workspace_mod.freeWorkspaces(allocator, workspaces);
+
+    const active = try workspace_mod.getActiveWorkspace(allocator, cfg);
+    defer if (active) |a| allocator.free(a);
+
+    writeOut("\n\x1b[1;36m📂 Workspaces\x1b[0m\n\n");
+
+    // Always show "global" as an option
+    const global_active = active == null;
+    if (global_active) {
+        writeOut("  \x1b[32m▸ global\x1b[0m (default)\n");
+    } else {
+        writeOut("    global (default)\n");
+    }
+
+    if (workspaces.len == 0) {
+        writeOut("\n  No custom workspaces yet.\n");
+        writeOut("  Create one with: zipet workspace create <name>\n");
+    } else {
+        for (workspaces) |ws| {
+            const is_active = if (active) |a| std.mem.eql(u8, a, ws.name) else false;
+            if (is_active) {
+                printOut(allocator, "  \x1b[32m▸ {s}\x1b[0m", .{ws.name});
+            } else {
+                printOut(allocator, "    {s}", .{ws.name});
+            }
+
+            const pad = if (ws.name.len < 18) 18 - ws.name.len else @as(usize, 1);
+            var i: usize = 0;
+            while (i < pad) : (i += 1) writeOut(" ");
+
+            if (ws.description.len > 0)
+                printOut(allocator, "{s}", .{ws.description});
+
+            printOut(allocator, "  \x1b[2m({d} snip", .{ws.snippet_count});
+            if (ws.workflow_count > 0) printOut(allocator, ", {d} wf", .{ws.workflow_count});
+            writeOut(")\x1b[0m");
+
+            if (ws.path.len > 0)
+                printOut(allocator, "  \x1b[2m→ {s}\x1b[0m", .{ws.path});
+
+            writeOut("\n");
+        }
+    }
+    writeOut("\n");
+}
+
+fn cmdWorkspaceCreate(allocator: std.mem.Allocator, args: []const []const u8, cfg: config.Config) !void {
+    const name = args[0];
+    var project_path: ?[]const u8 = null;
+
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "--path=")) {
+            project_path = arg["--path=".len..];
+        }
+    }
+
+    writeOut("Description: ");
+    var desc_buf: [512]u8 = undefined;
+    const desc = readLine(&desc_buf) orelse return;
+
+    workspace_mod.create(allocator, cfg, name, desc, project_path) catch |err| {
+        if (err == error.AlreadyExists) {
+            printOut(allocator, "Workspace '{s}' already exists\n", .{name});
+            return;
+        }
+        return err;
+    };
+
+    printOut(allocator, "\x1b[32m✓ Workspace '{s}' created\x1b[0m\n", .{name});
+    printOut(allocator, "  Switch to it: zipet workspace use {s}\n", .{name});
+    printOut(allocator, "  Install packs: zipet pack install pentesting --workspace={s}\n", .{name});
+}
+
+fn cmdWorkspaceUse(allocator: std.mem.Allocator, name: []const u8, cfg: config.Config) !void {
+    if (std.mem.eql(u8, name, "--global") or std.mem.eql(u8, name, "global")) {
+        try workspace_mod.setActiveWorkspace(allocator, cfg, null);
+        writeOut("\x1b[32m✓ Switched to global workspace\x1b[0m\n");
+        return;
+    }
+
+    // Verify workspace exists
+    const ws_dir = try workspace_mod.getWorkspaceDir(allocator, cfg, name);
+    defer allocator.free(ws_dir);
+
+    std.fs.accessAbsolute(ws_dir, .{}) catch {
+        printOut(allocator, "Workspace '{s}' not found. Create it first: zipet workspace create {s}\n", .{ name, name });
+        return;
+    };
+
+    try workspace_mod.setActiveWorkspace(allocator, cfg, name);
+    printOut(allocator, "\x1b[32m✓ Switched to workspace '{s}'\x1b[0m\n", .{name});
+}
+
+fn cmdWorkspaceRemove(allocator: std.mem.Allocator, name: []const u8, cfg: config.Config) !void {
+    if (std.mem.eql(u8, name, "global")) {
+        writeOut("Cannot delete the global workspace\n");
+        return;
+    }
+
+    writeOut("Delete workspace '");
+    writeOut(name);
+    writeOut("' and all its snippets? (y/N): ");
+    var buf: [64]u8 = undefined;
+    const input = readLine(&buf) orelse return;
+    if (input.len == 0 or (input[0] != 'y' and input[0] != 'Y')) {
+        writeOut("Cancelled\n");
+        return;
+    }
+
+    workspace_mod.remove(allocator, cfg, name) catch |err| {
+        if (err == error.NotFound) {
+            printOut(allocator, "Workspace '{s}' not found\n", .{name});
+            return;
+        }
+        return err;
+    };
+
+    printOut(allocator, "\x1b[32m✓ Workspace '{s}' deleted\x1b[0m\n", .{name});
+}
+
+fn cmdWorkspaceCurrent(allocator: std.mem.Allocator, cfg: config.Config) !void {
+    const active = try workspace_mod.getActiveWorkspace(allocator, cfg);
+    if (active) |a| {
+        defer allocator.free(a);
+        printOut(allocator, "Active workspace: \x1b[1;36m{s}\x1b[0m\n", .{a});
+    } else {
+        writeOut("Active workspace: \x1b[1;36mglobal\x1b[0m (default)\n");
+    }
+}
+
 fn printHelp() void {
     writeOut(
         \\zipet — snippets that grow with you
@@ -892,9 +1621,20 @@ fn printHelp() void {
         \\  workflow ls    List workflows
         \\  workflow show  Show workflow details
         \\  wf             Alias for workflow
+        \\  parallel       Run multiple snippets/workflows in parallel
+        \\  par            Alias for parallel
+        \\  pack ls        List available packs
+        \\  pack install   Install a pack (name, file, or URL)
+        \\  pack uninstall Remove an installed pack
+        \\  pack create    Create a pack from your snippets
+        \\  workspace ls   List workspaces
+        \\  workspace create  Create a workspace
+        \\  workspace use  Switch workspace
+        \\  ws             Alias for workspace
         \\  init           Initialize config directory
         \\  shell <sh>     Output shell integration (bash/zsh/fish)
-        \\  export         Export all snippets as TOML
+        \\  export [--json] Export all snippets (TOML default, or JSON)
+        \\  import <file>  Import snippets from .toml file or URL
         \\  history        Show execution history
         \\  help           Show this help
         \\  version        Show version

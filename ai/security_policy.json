@@ -1,0 +1,22 @@
+{
+  "_comment": "Política de seguridad por defecto para zipet MCP",
+  "max_level": "moderate",
+  "require_confirmation_above": "safe",
+  "blocked_commands": [
+    "rm -rf /",
+    "mkfs",
+    "dd if=",
+    ":(){",
+    "chmod -R 777 /",
+    "curl | sh",
+    "wget | sh",
+    "shutdown",
+    "reboot",
+    "init 0",
+    "init 6"
+  ],
+  "allowed_namespaces": ["*"],
+  "allowed_tags": ["*"],
+  "max_execution_time": 120,
+  "working_dir_restriction": null
+}

@@ -1,0 +1,154 @@
+# zipet pack — git-power
+# Advanced Git workflows and shortcuts
+# Share this file: zipet pack install git-power
+
+[pack]
+name = "git-power"
+description = "Advanced Git commands — interactive rebase, log visualization, bisect, stash tricks"
+author = "zipet"
+version = "1.0.0"
+category = "development"
+tags = ["git", "vcs", "development"]
+
+[snippets.git-log-graph]
+desc = "Beautiful git log graph"
+tags = ["git", "log"]
+cmd = "git log --oneline --graph --decorate --all --color -n {{count}}"
+
+[snippets.git-log-graph.params.count]
+prompt = "Number of commits"
+default = "30"
+
+[snippets.git-diff-stat]
+desc = "Show changed files between branches"
+tags = ["git", "diff"]
+cmd = "git diff --stat {{base}}..{{branch}}"
+
+[snippets.git-diff-stat.params.base]
+prompt = "Base branch"
+default = "main"
+
+[snippets.git-diff-stat.params.branch]
+prompt = "Compare branch"
+default = "HEAD"
+
+[snippets.git-undo-commit]
+desc = "Undo last commit (keep changes staged)"
+tags = ["git", "undo"]
+cmd = "git reset --soft HEAD~1"
+
+[snippets.git-amend-no-edit]
+desc = "Amend last commit without changing message"
+tags = ["git", "amend"]
+cmd = "git add -A && git commit --amend --no-edit"
+
+[snippets.git-stash-named]
+desc = "Stash with a descriptive name"
+tags = ["git", "stash"]
+cmd = "git stash push -m '{{message}}'"
+
+[snippets.git-stash-named.params.message]
+prompt = "Stash message"
+
+[snippets.git-stash-pop-n]
+desc = "Pop a specific stash by index"
+tags = ["git", "stash"]
+cmd = "git stash pop stash@{{{index}}}"
+
+[snippets.git-stash-pop-n.params.index]
+prompt = "Stash index"
+default = "0"
+
+[snippets.git-branch-cleanup]
+desc = "Delete merged local branches"
+tags = ["git", "cleanup"]
+cmd = "git branch --merged {{base}} | grep -v '\\*\\|main\\|master\\|develop' | xargs -r git branch -d"
+
+[snippets.git-branch-cleanup.params.base]
+prompt = "Base branch"
+default = "main"
+
+[snippets.git-find-commit]
+desc = "Search commit messages"
+tags = ["git", "search"]
+cmd = "git log --all --oneline --grep='{{query}}'"
+
+[snippets.git-find-commit.params.query]
+prompt = "Search query"
+
+[snippets.git-find-file]
+desc = "Find who last modified each line of a file"
+tags = ["git", "blame"]
+cmd = "git blame {{file}} | head -{{lines}}"
+
+[snippets.git-find-file.params.file]
+prompt = "File path"
+
+[snippets.git-find-file.params.lines]
+prompt = "Number of lines"
+default = "50"
+
+[snippets.git-rebase-i]
+desc = "Interactive rebase last N commits"
+tags = ["git", "rebase"]
+cmd = "git rebase -i HEAD~{{count}}"
+
+[snippets.git-rebase-i.params.count]
+prompt = "Number of commits"
+default = "5"
+
+[snippets.git-cherry-pick]
+desc = "Cherry-pick a commit by hash"
+tags = ["git", "cherry-pick"]
+cmd = "git cherry-pick {{commit}}"
+
+[snippets.git-cherry-pick.params.commit]
+prompt = "Commit hash"
+
+[snippets.git-bisect-start]
+desc = "Start git bisect between good and bad commits"
+tags = ["git", "bisect", "debug"]
+cmd = "git bisect start && git bisect bad {{bad}} && git bisect good {{good}}"
+
+[snippets.git-bisect-start.params.bad]
+prompt = "Bad commit (default: HEAD)"
+default = "HEAD"
+
+[snippets.git-bisect-start.params.good]
+prompt = "Good commit hash"
+
+[snippets.git-contributors]
+desc = "Show top contributors by commit count"
+tags = ["git", "stats"]
+cmd = "git shortlog -sn --all | head -20"
+
+[snippets.git-file-history]
+desc = "Show full history of a file"
+tags = ["git", "log", "history"]
+cmd = "git log --follow -p -- {{file}}"
+
+[snippets.git-file-history.params.file]
+prompt = "File path"
+
+[snippets.git-tag-release]
+desc = "Create an annotated tag for release"
+tags = ["git", "tag", "release"]
+cmd = "git tag -a {{version}} -m '{{message}}' && git push origin {{version}}"
+
+[snippets.git-tag-release.params.version]
+prompt = "Version tag (e.g. v1.0.0)"
+
+[snippets.git-tag-release.params.message]
+prompt = "Release message"
+default = "Release"
+
+[snippets.git-worktree-add]
+desc = "Create a git worktree for parallel work"
+tags = ["git", "worktree"]
+cmd = "git worktree add ../{{name}} {{branch}}"
+
+[snippets.git-worktree-add.params.name]
+prompt = "Worktree directory name"
+
+[snippets.git-worktree-add.params.branch]
+prompt = "Branch name"

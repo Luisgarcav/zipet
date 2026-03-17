@@ -1,0 +1,219 @@
+# zipet pack — devops
+# DevOps & infrastructure toolkit
+# Share this file: zipet pack install devops
+
+[pack]
+name = "devops"
+description = "DevOps toolkit — Docker, Kubernetes, CI/CD, monitoring, and deployment"
+author = "zipet"
+version = "1.0.0"
+category = "devops"
+tags = ["devops", "docker", "kubernetes", "deploy", "infrastructure"]
+
+# ── Docker ──
+
+[snippets.docker-ps]
+desc = "List running containers with resource usage"
+tags = ["docker", "status"]
+cmd = "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}'"
+
+[snippets.docker-clean]
+desc = "Clean up Docker — remove stopped containers, dangling images, unused networks"
+tags = ["docker", "cleanup"]
+cmd = "docker system prune -af --volumes"
+
+[snippets.docker-logs]
+desc = "Follow container logs with timestamps"
+tags = ["docker", "logs"]
+cmd = "docker logs -f --tail={{lines}} --timestamps {{container}}"
+
+[snippets.docker-logs.params.container]
+prompt = "Container name/ID"
+command = "docker ps --format '{{.Names}}'"
+
+[snippets.docker-logs.params.lines]
+prompt = "Number of tail lines"
+default = "100"
+
+[snippets.docker-exec]
+desc = "Interactive shell into running container"
+tags = ["docker", "exec", "shell"]
+cmd = "docker exec -it {{container}} {{shell}}"
+
+[snippets.docker-exec.params.container]
+prompt = "Container name/ID"
+command = "docker ps --format '{{.Names}}'"
+
+[snippets.docker-exec.params.shell]
+prompt = "Shell"
+default = "/bin/sh"
+
+[snippets.docker-build]
+desc = "Build Docker image with tag"
+tags = ["docker", "build"]
+cmd = "docker build -t {{image}}:{{tag}} {{context}}"
+
+[snippets.docker-build.params.image]
+prompt = "Image name"
+
+[snippets.docker-build.params.tag]
+prompt = "Tag"
+default = "latest"
+
+[snippets.docker-build.params.context]
+prompt = "Build context"
+default = "."
+
+[snippets.docker-stats]
+desc = "Real-time container resource usage"
+tags = ["docker", "monitor"]
+cmd = "docker stats --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}'"
+
+# ── Kubernetes ──
+
+[snippets.k8s-pods]
+desc = "List all pods across namespaces"
+tags = ["k8s", "pods", "status"]
+cmd = "kubectl get pods --all-namespaces -o wide"
+
+[snippets.k8s-logs]
+desc = "Stream pod logs"
+tags = ["k8s", "logs"]
+cmd = "kubectl logs -f {{pod}} -n {{namespace}} --tail={{lines}}"
+
+[snippets.k8s-logs.params.pod]
+prompt = "Pod name"
+command = "kubectl get pods -o name | sed 's/pod\\///'"
+
+[snippets.k8s-logs.params.namespace]
+prompt = "Namespace"
+default = "default"
+
+[snippets.k8s-logs.params.lines]
+prompt = "Tail lines"
+default = "100"
+
+[snippets.k8s-exec]
+desc = "Exec into a Kubernetes pod"
+tags = ["k8s", "exec", "shell"]
+cmd = "kubectl exec -it {{pod}} -n {{namespace}} -- {{shell}}"
+
+[snippets.k8s-exec.params.pod]
+prompt = "Pod name"
+command = "kubectl get pods -o name | sed 's/pod\\///'"
+
+[snippets.k8s-exec.params.namespace]
+prompt = "Namespace"
+default = "default"
+
+[snippets.k8s-exec.params.shell]
+prompt = "Shell"
+default = "/bin/sh"
+
+[snippets.k8s-apply]
+desc = "Apply Kubernetes manifest"
+tags = ["k8s", "deploy"]
+cmd = "kubectl apply -f {{manifest}} -n {{namespace}}"
+
+[snippets.k8s-apply.params.manifest]
+prompt = "Manifest file/directory"
+
+[snippets.k8s-apply.params.namespace]
+prompt = "Namespace"
+default = "default"
+
+[snippets.k8s-top]
+desc = "Show pod resource usage (CPU/memory)"
+tags = ["k8s", "monitor"]
+cmd = "kubectl top pods -n {{namespace}} --sort-by=cpu"
+
+[snippets.k8s-top.params.namespace]
+prompt = "Namespace"
+default = "default"
+
+[snippets.k8s-events]
+desc = "Watch Kubernetes events"
+tags = ["k8s", "debug"]
+cmd = "kubectl get events -n {{namespace}} --sort-by='.lastTimestamp' -w"
+
+[snippets.k8s-events.params.namespace]
+prompt = "Namespace"
+default = "default"
+
+# ── System & Monitoring ──
+
+[snippets.disk-usage-top]
+desc = "Top disk consumers in current directory"
+tags = ["system", "disk"]
+cmd = "du -sh * 2>/dev/null | sort -rh | head -20"
+
+[snippets.port-check]
+desc = "Check if a port is open"
+tags = ["network", "debug"]
+cmd = "nc -zv {{host}} {{port}}"
+
+[snippets.port-check.params.host]
+prompt = "Hostname"
+default = "localhost"
+
+[snippets.port-check.params.port]
+prompt = "Port"
+
+[snippets.process-memory]
+desc = "Top processes by memory usage"
+tags = ["system", "monitor"]
+cmd = "ps aux --sort=-%mem | head -20"
+
+[snippets.process-cpu]
+desc = "Top processes by CPU usage"
+tags = ["system", "monitor"]
+cmd = "ps aux --sort=-%cpu | head -20"
+
+[snippets.ssl-check]
+desc = "Check SSL certificate expiration"
+tags = ["ssl", "security"]
+cmd = "echo | openssl s_client -servername {{host}} -connect {{host}}:443 2>/dev/null | openssl x509 -noout -dates"
+
+[snippets.ssl-check.params.host]
+prompt = "Hostname"
+
+# ── Deployment ──
+
+[snippets.rsync-deploy]
+desc = "Deploy files with rsync"
+tags = ["deploy", "rsync"]
+cmd = "rsync -avz --progress --exclude='.git' {{source}} {{user}}@{{host}}:{{dest}}"
+
+[snippets.rsync-deploy.params.source]
+prompt = "Source directory"
+default = "./"
+
+[snippets.rsync-deploy.params.user]
+prompt = "Remote user"
+
+[snippets.rsync-deploy.params.host]
+prompt = "Remote host"
+
+[snippets.rsync-deploy.params.dest]
+prompt = "Remote destination"
+
+[snippets.ssh-tunnel]
+desc = "SSH tunnel — forward local port to remote"
+tags = ["ssh", "tunnel", "network"]
+cmd = "ssh -L {{local_port}}:{{remote_host}}:{{remote_port}} {{user}}@{{host}} -N"
+
+[snippets.ssh-tunnel.params.local_port]
+prompt = "Local port"
+
+[snippets.ssh-tunnel.params.remote_host]
+prompt = "Remote target host"
+default = "localhost"
+
+[snippets.ssh-tunnel.params.remote_port]
+prompt = "Remote target port"
+
+[snippets.ssh-tunnel.params.user]
+prompt = "SSH user"
+
+[snippets.ssh-tunnel.params.host]
+prompt = "SSH host"

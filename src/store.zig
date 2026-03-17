@@ -309,7 +309,7 @@ pub const Store = struct {
         return error.NotFound;
     }
 
-    fn saveNamespace(self: *Store, namespace: []const u8) !void {
+    pub fn saveNamespace(self: *Store, namespace: []const u8) !void {
         const snippets_dir = try self.cfg.getSnippetsDir(self.allocator);
         defer self.allocator.free(snippets_dir);
 

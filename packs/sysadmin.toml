@@ -1,0 +1,149 @@
+# zipet pack — sysadmin
+# System administration essentials
+# Share this file: zipet pack install sysadmin
+
+[pack]
+name = "sysadmin"
+description = "Linux system administration — disk, network, services, users, logs"
+author = "zipet"
+version = "1.0.0"
+category = "sysadmin"
+tags = ["linux", "sysadmin", "system", "server"]
+
+[snippets.find-large-files]
+desc = "Find files larger than a given size"
+tags = ["disk", "find"]
+cmd = "find {{path}} -type f -size +{{size}} -exec ls -lh {} + 2>/dev/null | sort -k5 -rh | head -20"
+
+[snippets.find-large-files.params.path]
+prompt = "Search path"
+default = "/"
+
+[snippets.find-large-files.params.size]
+prompt = "Minimum size"
+default = "100M"
+
+[snippets.disk-usage-dirs]
+desc = "Directory sizes sorted by usage"
+tags = ["disk", "usage"]
+cmd = "du -h --max-depth={{depth}} {{path}} 2>/dev/null | sort -rh | head -{{count}}"
+
+[snippets.disk-usage-dirs.params.path]
+prompt = "Path"
+default = "/"
+
+[snippets.disk-usage-dirs.params.depth]
+prompt = "Max depth"
+default = "1"
+
+[snippets.disk-usage-dirs.params.count]
+prompt = "Number of results"
+default = "20"
+
+[snippets.system-info]
+desc = "Quick system overview — CPU, memory, disk, uptime"
+tags = ["system", "info"]
+cmd = "echo '=== Uptime ===' && uptime && echo '\\n=== Memory ===' && free -h && echo '\\n=== Disk ===' && df -h / && echo '\\n=== CPU ===' && lscpu | grep 'Model name\\|CPU(s)\\|Thread'"
+
+[snippets.active-connections]
+desc = "Show active network connections"
+tags = ["network", "connections"]
+cmd = "ss -tunap | head -{{count}}"
+
+[snippets.active-connections.params.count]
+prompt = "Number of lines"
+default = "30"
+
+[snippets.listening-ports]
+desc = "Show all listening ports"
+tags = ["network", "ports"]
+cmd = "ss -tlnp"
+
+[snippets.tail-syslog]
+desc = "Follow system log"
+tags = ["logs", "system"]
+cmd = "sudo journalctl -f -n {{lines}} -u {{service}}"
+
+[snippets.tail-syslog.params.lines]
+prompt = "Initial lines"
+default = "50"
+
+[snippets.tail-syslog.params.service]
+prompt = "Service (or 'all')"
+default = "all"
+
+[snippets.failed-logins]
+desc = "Show failed SSH login attempts"
+tags = ["security", "ssh", "logs"]
+cmd = "sudo journalctl -u sshd | grep 'Failed password' | tail -{{count}}"
+
+[snippets.failed-logins.params.count]
+prompt = "Number of lines"
+default = "20"
+
+[snippets.service-status]
+desc = "Check systemd service status"
+tags = ["service", "systemd"]
+cmd = "systemctl status {{service}}"
+
+[snippets.service-status.params.service]
+prompt = "Service name"
+command = "systemctl list-units --type=service --state=running --no-pager --no-legend | awk '{print $1}'"
+
+[snippets.service-restart]
+desc = "Restart a systemd service"
+tags = ["service", "systemd"]
+cmd = "sudo systemctl restart {{service}} && systemctl status {{service}}"
+
+[snippets.service-restart.params.service]
+prompt = "Service name"
+
+[snippets.user-add]
+desc = "Create a new user with home directory"
+tags = ["user", "admin"]
+cmd = "sudo useradd -m -s {{shell}} {{username}} && sudo passwd {{username}}"
+
+[snippets.user-add.params.username]
+prompt = "Username"
+
+[snippets.user-add.params.shell]
+prompt = "Shell"
+default = "/bin/bash"
+
+[snippets.file-permissions]
+desc = "Find files with specific permissions"
+tags = ["security", "permissions"]
+cmd = "find {{path}} -perm {{perms}} -type f 2>/dev/null"
+
+[snippets.file-permissions.params.path]
+prompt = "Search path"
+default = "/"
+
+[snippets.file-permissions.params.perms]
+prompt = "Permissions (e.g. -4000 for SUID)"
+default = "-4000"
+
+[snippets.iptables-list]
+desc = "List all iptables rules"
+tags = ["firewall", "network"]
+cmd = "sudo iptables -L -n -v --line-numbers"
+
+[snippets.cron-list]
+desc = "List all cron jobs for all users"
+tags = ["cron", "schedule"]
+cmd = "for user in $(cut -f1 -d: /etc/passwd); do crontab -l -u $user 2>/dev/null | grep -v '^#' | grep -v '^$' && echo \"--- $user ---\"; done"
+
+[snippets.zombie-processes]
+desc = "Find zombie processes"
+tags = ["process", "debug"]
+cmd = "ps aux | awk '{if ($8 == \"Z\") print}'"
+
+[snippets.memory-hogs]
+desc = "Top 15 processes by memory usage"
+tags = ["memory", "monitor"]
+cmd = "ps aux --sort=-%mem | head -16"
+
+[snippets.open-files]
+desc = "Count open files per process"
+tags = ["system", "debug"]
+cmd = "lsof 2>/dev/null | awk '{print $1}' | sort | uniq -c | sort -rn | head -20"

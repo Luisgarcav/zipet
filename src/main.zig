@@ -4,6 +4,8 @@ const tui = @import("tui.zig");
 const store = @import("store.zig");
 const config = @import("config.zig");
 const workflow = @import("workflow.zig");
+const pack = @import("pack.zig");
+const workspace = @import("workspace.zig");
 
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
@@ -40,4 +42,6 @@ test {
     _ = @import("store.zig");
     _ = @import("config.zig");
     _ = @import("workflow.zig");
+    _ = @import("pack.zig");
+    _ = @import("workspace.zig");
 }

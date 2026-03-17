@@ -1,0 +1,133 @@
+# zipet pack — web-dev
+# Web development utilities
+# Share this file: zipet pack install web-dev
+
+[pack]
+name = "web-dev"
+description = "Web development toolkit — HTTP testing, API debugging, frontend & backend helpers"
+author = "zipet"
+version = "1.0.0"
+category = "development"
+tags = ["web", "api", "http", "development", "frontend"]
+
+[snippets.curl-get]
+desc = "HTTP GET with headers and timing"
+tags = ["http", "curl", "api"]
+cmd = "curl -s -w '\\n\\nHTTP %{http_code} — %{time_total}s\\n' -H 'Accept: application/json' '{{url}}' | jq . 2>/dev/null || curl -s '{{url}}'"
+
+[snippets.curl-get.params.url]
+prompt = "URL"
+
+[snippets.curl-post]
+desc = "HTTP POST with JSON body"
+tags = ["http", "curl", "api"]
+cmd = "curl -s -X POST -H 'Content-Type: application/json' -d '{{body}}' '{{url}}' | jq ."
+
+[snippets.curl-post.params.url]
+prompt = "URL"
+
+[snippets.curl-post.params.body]
+prompt = "JSON body"
+default = "{}"
+
+[snippets.curl-headers]
+desc = "Show response headers only"
+tags = ["http", "curl", "debug"]
+cmd = "curl -sI '{{url}}'"
+
+[snippets.curl-headers.params.url]
+prompt = "URL"
+
+[snippets.serve-dir]
+desc = "Serve current directory over HTTP"
+tags = ["http", "server", "dev"]
+cmd = "python3 -m http.server {{port}}"
+
+[snippets.serve-dir.params.port]
+prompt = "Port"
+default = "8000"
+
+[snippets.json-format]
+desc = "Format JSON from clipboard or file"
+tags = ["json", "format"]
+cmd = "cat {{file}} | jq ."
+
+[snippets.json-format.params.file]
+prompt = "JSON file (or - for stdin)"
+default = "-"
+
+[snippets.npm-outdated]
+desc = "Check for outdated npm packages"
+tags = ["npm", "node", "deps"]
+cmd = "npm outdated --depth=0"
+
+[snippets.npm-audit-fix]
+desc = "Fix npm security vulnerabilities"
+tags = ["npm", "security"]
+cmd = "npm audit fix"
+
+[snippets.kill-port]
+desc = "Kill process on a specific port"
+tags = ["process", "port", "dev"]
+cmd = "lsof -ti:{{port}} | xargs kill -9 2>/dev/null && echo 'Killed process on port {{port}}' || echo 'No process on port {{port}}'"
+
+[snippets.kill-port.params.port]
+prompt = "Port number"
+
+[snippets.ssl-local]
+desc = "Generate self-signed SSL cert for local dev"
+tags = ["ssl", "dev"]
+cmd = "openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj '/CN={{domain}}'"
+
+[snippets.ssl-local.params.domain]
+prompt = "Domain name"
+default = "localhost"
+
+[snippets.cors-test]
+desc = "Test CORS headers on a URL"
+tags = ["cors", "http", "debug"]
+cmd = "curl -s -I -H 'Origin: {{origin}}' -H 'Access-Control-Request-Method: GET' -X OPTIONS '{{url}}' | grep -i 'access-control'"
+
+[snippets.cors-test.params.url]
+prompt = "URL to test"
+
+[snippets.cors-test.params.origin]
+prompt = "Origin header"
+default = "http://localhost:3000"
+
+[snippets.base64-encode]
+desc = "Base64 encode a string"
+tags = ["encode", "util"]
+cmd = "echo -n '{{text}}' | base64"
+
+[snippets.base64-encode.params.text]
+prompt = "Text to encode"
+
+[snippets.base64-decode]
+desc = "Base64 decode a string"
+tags = ["decode", "util"]
+cmd = "echo '{{text}}' | base64 -d"
+
+[snippets.base64-decode.params.text]
+prompt = "Base64 string"
+
+[snippets.jwt-decode]
+desc = "Decode a JWT token (header + payload)"
+tags = ["jwt", "auth", "debug"]
+cmd = "echo '{{token}}' | cut -d. -f2 | base64 -d 2>/dev/null | jq ."
+
+[snippets.jwt-decode.params.token]
+prompt = "JWT token"
+
+[snippets.watch-files]
+desc = "Watch for file changes and run a command"
+tags = ["dev", "watch"]
+cmd = "inotifywait -mr {{path}} -e modify,create,delete | while read path action file; do echo \"$action: $path$file\"; {{command}}; done"
+
+[snippets.watch-files.params.path]
+prompt = "Watch path"
+default = "."
+
+[snippets.watch-files.params.command]
+prompt = "Command to run on change"
+default = "echo 'File changed'"

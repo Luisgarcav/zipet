@@ -1,0 +1,294 @@
+/// TUI types, state, and style definitions for zipet.
+const std = @import("std");
+const vaxis = @import("vaxis");
+const config = @import("../config.zig");
+const workspace_mod = @import("../workspace.zig");
+const pack_mod = @import("../pack.zig");
+
+pub const Cell = vaxis.Cell;
+pub const Key = vaxis.Key;
+pub const Style = Cell.Style;
+pub const Color = Cell.Color;
+pub const Segment = Cell.Segment;
+pub const Window = vaxis.Window;
+
+// ── Event type ──
+pub const Event = union(enum) {
+    key_press: Key,
+    winsize: vaxis.Winsize,
+    focus_in,
+    focus_out,
+};
+
+// ── Modes ──
+pub const Mode = enum {
+    normal,
+    search,
+    command,
+    help,
+    confirm_delete,
+    tag_picker,
+    info,
+    form,
+    param_input,
+    output_view,
+    workspace_picker,
+    pack_browser,
+};
+
+// ── Text Field ──
+pub const FIELD_CAP = 1024;
+
+pub const TextField = struct {
+    buf: [FIELD_CAP]u8 = [_]u8{0} ** FIELD_CAP,
+    len: usize = 0,
+    cursor: usize = 0,
+
+    pub fn text(self: *const TextField) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    pub fn setText(self: *TextField, s: []const u8) void {
+        const n = @min(s.len, FIELD_CAP);
+        @memcpy(self.buf[0..n], s[0..n]);
+        self.len = n;
+        self.cursor = n;
+    }
+
+    pub fn clear(self: *TextField) void {
+        self.len = 0;
+        self.cursor = 0;
+    }
+
+    pub fn insertChar(self: *TextField, c: u8) void {
+        if (self.len >= FIELD_CAP - 1) return;
+        if (self.cursor < self.len) {
+            var i = self.len;
+            while (i > self.cursor) : (i -= 1) {
+                self.buf[i] = self.buf[i - 1];
+            }
+        }
+        self.buf[self.cursor] = c;
+        self.len += 1;
+        self.cursor += 1;
+    }
+
+    pub fn backspace(self: *TextField) void {
+        if (self.cursor == 0) return;
+        if (self.cursor < self.len) {
+            var i = self.cursor - 1;
+            while (i + 1 < self.len) : (i += 1) {
+                self.buf[i] = self.buf[i + 1];
+            }
+        }
+        self.len -= 1;
+        self.cursor -= 1;
+    }
+
+    pub fn deleteForward(self: *TextField) void {
+        if (self.cursor >= self.len) return;
+        var i = self.cursor;
+        while (i + 1 < self.len) : (i += 1) {
+            self.buf[i] = self.buf[i + 1];
+        }
+        self.len -= 1;
+    }
+
+    pub fn moveLeft(self: *TextField) void {
+        if (self.cursor > 0) self.cursor -= 1;
+    }
+
+    pub fn moveRight(self: *TextField) void {
+        if (self.cursor < self.len) self.cursor += 1;
+    }
+
+    pub fn moveHome(self: *TextField) void {
+        self.cursor = 0;
+    }
+
+    pub fn moveEnd(self: *TextField) void {
+        self.cursor = self.len;
+    }
+};
+
+// ── Form state ──
+pub const MAX_FORM_FIELDS = 6;
+
+pub const FormPurpose = enum { add, edit, paste };
+
+pub const FormState = struct {
+    fields: [MAX_FORM_FIELDS]TextField = [_]TextField{.{}} ** MAX_FORM_FIELDS,
+    labels: [MAX_FORM_FIELDS][]const u8 = [_][]const u8{""} ** MAX_FORM_FIELDS,
+    field_count: usize = 0,
+    active: usize = 0,
+    purpose: FormPurpose = .add,
+    editing_snip_idx: ?usize = null,
+    error_msg: ?[]const u8 = null,
+
+    pub const F_NAME = 0;
+    pub const F_DESC = 1;
+    pub const F_CMD = 2;
+    pub const F_TAGS = 3;
+    pub const F_NS = 4;
+
+    pub fn init(purpose: FormPurpose) FormState {
+        var f = FormState{};
+        f.purpose = purpose;
+        f.field_count = 5;
+        f.labels = .{ "Name", "Description", "Command", "Tags", "Namespace", "" };
+        f.fields[F_NS].setText("general");
+        return f;
+    }
+
+    pub fn activeField(self: *FormState) *TextField {
+        return &self.fields[self.active];
+    }
+};
+
+// ── Param input state ──
+pub const MAX_PARAMS = 16;
+
+pub const ParamInputState = struct {
+    fields: [MAX_PARAMS]TextField = [_]TextField{.{}} ** MAX_PARAMS,
+    labels: [MAX_PARAMS][]const u8 = [_][]const u8{""} ** MAX_PARAMS,
+    defaults: [MAX_PARAMS]?[]const u8 = [_]?[]const u8{null} ** MAX_PARAMS,
+    param_count: usize = 0,
+    active: usize = 0,
+    snippet_idx: usize = 0,
+    is_workflow: bool = false,
+    rendered_cmd: ?[]const u8 = null,
+
+    pub fn activeField(self: *ParamInputState) *TextField {
+        return &self.fields[self.active];
+    }
+};
+
+// ── Output line style ──
+pub const LineStyle = enum { normal, header, dim, success, err, cmd };
+
+// ── Output buffer that stores styled lines ──
+pub const OutputBuf = struct {
+    alloc: std.mem.Allocator,
+    lines: std.ArrayList(StyledLine),
+
+    pub const StyledLine = struct {
+        text: []const u8,
+        style: LineStyle,
+    };
+
+    pub fn init(alloc: std.mem.Allocator) OutputBuf {
+        return .{ .alloc = alloc, .lines = .{} };
+    }
+
+    pub fn deinit(self: *OutputBuf) void {
+        for (self.lines.items) |line| self.alloc.free(line.text);
+        self.lines.deinit(self.alloc);
+    }
+
+    pub fn add(self: *OutputBuf, t: []const u8, style: LineStyle) void {
+        const owned = self.alloc.dupe(u8, t) catch return;
+        self.lines.append(self.alloc, .{ .text = owned, .style = style }) catch {
+            self.alloc.free(owned);
+        };
+    }
+
+    pub fn addFmt(self: *OutputBuf, alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype, style: LineStyle) void {
+        const t = std.fmt.allocPrint(alloc, fmt, args) catch return;
+        self.lines.append(self.alloc, .{ .text = t, .style = style }) catch {
+            alloc.free(t);
+        };
+    }
+
+    pub fn addMultiline(self: *OutputBuf, t: []const u8, style: LineStyle) void {
+        var iter = std.mem.splitScalar(u8, t, '\n');
+        while (iter.next()) |line| {
+            if (line.len > 0 or iter.peek() != null) {
+                self.add(line, style);
+            }
+        }
+    }
+};
+
+// ── Main state ──
+pub const State = struct {
+    mode: Mode = .normal,
+    cursor: usize = 0,
+    scroll_offset: usize = 0,
+    search_buf: [256]u8 = [_]u8{0} ** 256,
+    search_len: usize = 0,
+    command_buf: [256]u8 = [_]u8{0} ** 256,
+    command_len: usize = 0,
+    preview_visible: bool = true,
+    running: bool = true,
+    filtered_indices: []usize = &.{},
+    message: ?[]const u8 = null,
+    pending_g: bool = false,
+    tag_list: []const []const u8 = &.{},
+    tag_cursor: usize = 0,
+    active_tag_filter: ?[]const u8 = null,
+
+    // Sub-states
+    form: FormState = .{},
+    param_input: ParamInputState = .{},
+    output: OutputBuf = undefined,
+    output_scroll: usize = 0,
+    output_title: []const u8 = "",
+
+    // Workspace state
+    active_workspace: ?[]const u8 = null,
+    ws_list: []workspace_mod.Workspace = &.{},
+    ws_cursor: usize = 0,
+    ws_loaded: bool = false,
+
+    // Pack browser state
+    pack_list: []pack_mod.PackMeta = &.{},
+    pack_cursor: usize = 0,
+    pack_scroll: usize = 0,
+
+    pub fn searchQuery(self: *State) []const u8 {
+        return self.search_buf[0..self.search_len];
+    }
+
+    pub fn commandStr(self: *State) []const u8 {
+        return self.command_buf[0..self.command_len];
+    }
+
+    pub fn listHeight(self: *State, term_rows: u16) usize {
+        const rows: usize = @intCast(term_rows);
+        const chrome: usize = if (self.preview_visible) 8 else 4;
+        if (rows <= chrome) return 1;
+        return rows - chrome;
+    }
+};
+
+// ── Styles ──
+pub fn accentColor(c: config.Color) Color {
+    return switch (c) {
+        .cyan => .{ .index = 6 },
+        .green => .{ .index = 2 },
+        .yellow => .{ .index = 3 },
+        .magenta => .{ .index = 5 },
+        .red => .{ .index = 1 },
+        .blue => .{ .index = 4 },
+        .white => .{ .index = 7 },
+    };
+}
+
+pub fn accentStyle(c: config.Color) Style {
+    return .{ .fg = accentColor(c) };
+}
+
+pub fn accentBoldStyle(c: config.Color) Style {
+    return .{ .fg = accentColor(c), .bold = true };
+}
+
+pub const dim_style: Style = .{ .dim = true };
+pub const bold_style: Style = .{ .bold = true };
+pub const reverse_style: Style = .{ .reverse = true };
+pub const wf_style: Style = .{ .fg = .{ .index = 3 }, .bold = true };
+pub const chain_style: Style = .{ .fg = .{ .index = 5 }, .bold = true };
+pub const snip_icon_style: Style = .{ .dim = true };
+pub const del_style: Style = .{ .fg = .{ .index = 1 }, .bold = true };
+pub const success_style: Style = .{ .fg = .{ .index = 2 }, .bold = true };
+pub const err_style: Style = .{ .fg = .{ .index = 1 } };
+pub const header_style: Style = .{ .fg = .{ .index = 6 }, .bold = true };

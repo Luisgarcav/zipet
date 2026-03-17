@@ -2,10 +2,16 @@
     .name = .zipet,
     .version = "0.1.0",
     .fingerprint = 0x287df56dc7f801dd,
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.1",
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+    },
+    .dependencies = .{
+        .vaxis = .{
+            .url = "git+https://github.com/rockorager/libvaxis#41fff922316dcb8776332ec460e73eaf397d5033",
+            .hash = "vaxis-0.5.1-BWNV_JJOCQAtdJyLvrYCKbKIhX9q3liQkKMAzujWS4HJ",
+        },
     },
 }

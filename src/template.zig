@@ -102,6 +102,20 @@ pub fn resolveBuiltin(allocator: std.mem.Allocator, name: []const u8) !?[]const 
     if (std.mem.eql(u8, name, "git_root")) {
         return try runCapture(allocator, &.{ "git", "rev-parse", "--show-toplevel" });
     }
+    if (std.mem.eql(u8, name, "datetime")) {
+        return try getDatetime(allocator);
+    }
+    if (std.mem.eql(u8, name, "clipboard")) {
+        return try readClipboard(allocator);
+    }
+    if (std.mem.eql(u8, name, "last_output")) {
+        // last_output is context-dependent — should be passed as a param in chains/workflows.
+        // When used standalone, return empty string.
+        return try allocator.dupe(u8, "");
+    }
+    if (std.mem.eql(u8, name, "last_exit")) {
+        return try allocator.dupe(u8, "0");
+    }
     return null;
 }
 
@@ -164,6 +178,58 @@ fn getDate(allocator: std.mem.Allocator) ![]const u8 {
         @intFromEnum(month_day.month),
         month_day.day_index + 1,
     });
+}
+
+fn getDatetime(allocator: std.mem.Allocator) ![]const u8 {
+    const ts = std.time.timestamp();
+    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
+    const epoch_day = epoch_seconds.getEpochDay();
+    const year_day = epoch_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const day_seconds = epoch_seconds.getDaySeconds();
+    const hour = day_seconds.getHoursIntoDay();
+    const minute = day_seconds.getMinutesIntoHour();
+    const second = day_seconds.getSecondsIntoMinute();
+
+    return try std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+        year_day.year,
+        @intFromEnum(month_day.month),
+        month_day.day_index + 1,
+        hour,
+        minute,
+        second,
+    });
+}
+
+pub fn readClipboard(allocator: std.mem.Allocator) !?[]const u8 {
+    const clipboard_cmds = [_][]const []const u8{
+        &.{ "xclip", "-selection", "clipboard", "-o" },
+        &.{ "xsel", "--clipboard", "--output" },
+        &.{"wl-paste"},
+        &.{ "pbpaste" },
+    };
+
+    for (clipboard_cmds) |argv| {
+        const result = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = argv,
+        }) catch continue;
+        defer allocator.free(result.stderr);
+
+        if (result.term.Exited == 0) {
+            // Trim trailing newline
+            var out = result.stdout;
+            while (out.len > 0 and (out[out.len - 1] == '\n' or out[out.len - 1] == '\r')) {
+                out = out[0 .. out.len - 1];
+            }
+            if (out.len == result.stdout.len) return out;
+            const trimmed = try allocator.dupe(u8, out);
+            allocator.free(result.stdout);
+            return trimmed;
+        }
+        allocator.free(result.stdout);
+    }
+    return null;
 }
 
 fn runCapture(allocator: std.mem.Allocator, argv: []const []const u8) !?[]const u8 {
