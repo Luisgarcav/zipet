@@ -10,6 +10,7 @@ const pack_mod = @import("../pack.zig");
 
 const t = @import("types.zig");
 const utils = @import("utils.zig");
+const OutputView = @import("widgets/output_view.zig");
 const vxfw = t.vxfw;
 
 /// Root widget that routes between modes. Currently renders a placeholder;
@@ -20,6 +21,7 @@ const ZipetRoot = struct {
     cfg: config.Config,
     hist: *history_mod.History,
     allocator: std.mem.Allocator,
+    output_view: OutputView,
 
     pub fn widget(self: *ZipetRoot) vxfw.Widget {
         return .{
@@ -32,13 +34,18 @@ const ZipetRoot = struct {
     fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
         const self: *ZipetRoot = @ptrCast(@alignCast(userdata));
 
-        switch (event) {
-            .key_press => |key| {
-                if (key.codepoint == 'q') {
-                    self.state.running = false;
+        switch (self.state.mode) {
+            .output_view => return self.output_view.widget().handleEvent(ctx, event),
+            else => {
+                switch (event) {
+                    .key_press => |key| {
+                        if (key.codepoint == 'q') {
+                            self.state.running = false;
+                        }
+                    },
+                    else => {},
                 }
             },
-            else => {},
         }
 
         // Bridge: sync state.running → vxfw quit
@@ -46,9 +53,15 @@ const ZipetRoot = struct {
     }
 
     fn draw(userdata: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxfw.Surface {
-        _ = userdata;
-        var label = vxfw.Text{ .text = "zipet - migrating to vxfw, press q to quit", .style = .{} };
-        return label.widget().draw(ctx);
+        const self: *ZipetRoot = @ptrCast(@alignCast(userdata));
+
+        switch (self.state.mode) {
+            .output_view => return self.output_view.widget().draw(ctx),
+            else => {
+                var label = vxfw.Text{ .text = "zipet - migrating to vxfw, press q to quit", .style = .{} };
+                return label.widget().draw(ctx);
+            },
+        }
     }
 };
 
@@ -82,6 +95,7 @@ pub fn run(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.C
         .cfg = cfg,
         .hist = hist,
         .allocator = allocator,
+        .output_view = .{ .state = &state, .cfg = cfg },
     };
 
     var app = try vxfw.App.init(allocator);
