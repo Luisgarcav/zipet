@@ -1,8 +1,7 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="zipet logo" width="180" />
+  <img src="assets/logo.png" alt="zipet logo" width="280" />
 </p>
 
-<h1 align="center">⚡ zipet</h1>
 <p align="center"><strong>Snippets that grow with you</strong></p>
 <p align="center">
   A blazing-fast command snippet manager with TUI, workflows, packs, and fuzzy search — written in Zig.
@@ -145,6 +144,7 @@ Launch with just `zipet` — a vim-native interface powered by [libvaxis](https:
 | `/` | Focus search bar |
 | `Enter` | Run selected snippet |
 | `a` | Add new snippet (inline form) |
+| `w` | Create new workflow (inline wizard) |
 | `e` | Edit snippet in `$EDITOR` |
 | `d` | Delete (with confirmation) |
 | `y` | Yank command to clipboard |

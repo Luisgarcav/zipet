@@ -43,7 +43,15 @@ pub fn getWorkspaceWorkflowsDir(allocator: std.mem.Allocator, cfg: config.Config
 }
 
 /// Read the active workspace name (null = "default" / global)
+/// First checks if the current directory matches any workspace's project path,
+/// then falls back to the stored active_workspace file.
 pub fn getActiveWorkspace(allocator: std.mem.Allocator, cfg: config.Config) !?[]const u8 {
+    // 1. Auto-detect by current working directory
+    if (detectWorkspaceByDir(allocator, cfg)) |ws_name| {
+        return ws_name;
+    } else |_| {}
+
+    // 2. Fall back to explicit active_workspace file
     const config_dir = try cfg.getConfigDir(allocator);
     defer allocator.free(config_dir);
 
@@ -63,6 +71,76 @@ pub fn getActiveWorkspace(allocator: std.mem.Allocator, cfg: config.Config) !?[]
     const duped = try allocator.dupe(u8, trimmed);
     allocator.free(content);
     return duped;
+}
+
+/// Detect workspace by matching cwd (or any parent) against workspace paths.
+/// Returns the workspace name if found, null otherwise.
+pub fn detectWorkspaceByDir(allocator: std.mem.Allocator, cfg: config.Config) !?[]const u8 {
+    const cwd_buf = std.fs.cwd().realpathAlloc(allocator, ".") catch return null;
+    defer allocator.free(cwd_buf);
+
+    const ws_base = try getWorkspacesDir(allocator, cfg);
+    defer allocator.free(ws_base);
+
+    // Ensure directory exists
+    std.fs.makeDirAbsolute(ws_base) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return null,
+    };
+
+    var dir = std.fs.openDirAbsolute(ws_base, .{ .iterate = true }) catch return null;
+    defer dir.close();
+
+    var best_match: ?[]const u8 = null;
+    var best_len: usize = 0;
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .directory) continue;
+
+        const meta_path = try std.fmt.allocPrint(allocator, "{s}/{s}/workspace.toml", .{ ws_base, entry.name });
+        defer allocator.free(meta_path);
+
+        const meta_file = std.fs.openFileAbsolute(meta_path, .{}) catch continue;
+        defer meta_file.close();
+
+        const content = meta_file.readToEndAlloc(allocator, 1024 * 64) catch continue;
+        defer allocator.free(content);
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        const table = toml.parse(arena.allocator(), content) catch continue;
+
+        const ws_path = table.getString("workspace.path") orelse continue;
+        if (ws_path.len == 0) continue;
+
+        // Resolve ~ in workspace path
+        const resolved = if (std.mem.startsWith(u8, ws_path, "~/")) blk: {
+            const home = std.posix.getenv("HOME") orelse continue;
+            break :blk std.fmt.allocPrint(allocator, "{s}/{s}", .{ home, ws_path[2..] }) catch continue;
+        } else blk: {
+            break :blk allocator.dupe(u8, ws_path) catch continue;
+        };
+        defer allocator.free(resolved);
+
+        // Check if cwd starts with (or equals) the workspace path
+        // This handles being in a subdirectory of the project
+        if (std.mem.eql(u8, cwd_buf, resolved) or
+            (std.mem.startsWith(u8, cwd_buf, resolved) and
+            cwd_buf.len > resolved.len and
+            cwd_buf[resolved.len] == '/'))
+        {
+            // Longest match wins (most specific project dir)
+            if (resolved.len > best_len) {
+                if (best_match) |prev| allocator.free(prev);
+                best_match = allocator.dupe(u8, entry.name) catch continue;
+                best_len = resolved.len;
+            }
+        }
+    }
+
+    return best_match;
 }
 
 /// Set the active workspace

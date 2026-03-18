@@ -1,0 +1,125 @@
+.\" zipet-workflow(1) — workflow management
+.
+.TH ZIPET\-WORKFLOW 1 "2024-03-18" "zipet 0.1.0" "User Commands"
+.
+.SH NAME
+zipet\-workflow \- create, run, and manage multi-step command pipelines
+.
+.SH SYNOPSIS
+.B zipet workflow
+.I subcommand
+.RI [ arguments ]
+.br
+.B zipet wf
+.I subcommand
+.RI [ arguments ]
+.
+.SH DESCRIPTION
+Workflows chain multiple commands and snippet references into sequential
+pipelines with error handling and data passing between steps.
+.PP
+.B wf
+is an alias for
+.BR workflow .
+.
+.SH SUBCOMMANDS
+.TP
+.B add
+Create a new workflow interactively. The wizard prompts for a name,
+description, tags, namespace, and then iteratively collects steps.
+Each step can be an inline command or a reference to an existing snippet.
+A failure policy
+.RB ( stop ", " continue ", " skip_rest )
+is set per step.
+.TP
+.BI "run " "name"
+Execute the workflow called
+.IR name .
+Steps run sequentially. The special variables
+.B {{prev_stdout}}
+and
+.B {{prev_exit}}
+are available in each step to reference the output and exit code of the
+previous step. Workflow-level parameters are prompted once and shared across
+all steps.
+.TP
+.B ls
+List all workflows with their descriptions and step summaries.
+.TP
+.BI "show " "name"
+Display full details of the workflow
+.IR name ,
+including all steps, their commands or snippet references, failure policies,
+and parameters.
+.TP
+.BI "rm " "name"
+Delete the workflow called
+.IR name .
+.TP
+.BI "edit " "name"
+Open the TOML file containing the workflow in
+.BR $EDITOR .
+.
+.SH WORKFLOW FEATURES
+.TP
+.B Step chaining
+Each step can be an inline command or a reference to an existing snippet.
+.TP
+.B Inter-step data
+Use
+.B {{prev_stdout}}
+to access the standard output of the previous step, and
+.B {{prev_exit}}
+for its exit code.
+.TP
+.B Failure policies
+Each step has an
+.B on_fail
+policy:
+.RS
+.TP
+.B stop
+Abort the workflow immediately (default).
+.TP
+.B continue
+Log the error and proceed to the next step.
+.TP
+.B skip_rest
+Skip all remaining steps but don't mark the workflow as failed.
+.RE
+.TP
+.B Workflow-level params
+Parameters detected across all steps are prompted once at the start.
+.TP
+.B Edit in $EDITOR
+Use
+.B zipet wf edit <name>
+to modify the raw TOML definition.
+.
+.SH EXAMPLES
+.nf
+# Create a workflow interactively
+zipet workflow add
+
+# Run a workflow
+zipet wf run deploy\-all
+
+# List all workflows
+zipet wf ls
+
+# Inspect a workflow
+zipet wf show deploy\-all
+
+# Edit in your editor
+zipet wf edit deploy\-all
+
+# Delete
+zipet wf rm deploy\-all
+.fi
+.
+.SH SEE ALSO
+.BR zipet (1),
+.BR zipet\-snippets (5)
+.
+.SH AUTHORS
+Luis Garcia

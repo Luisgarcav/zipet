@@ -1,0 +1,347 @@
+.\" zipet(1) — command snippet manager
+.\" Copyright (c) 2024 Luis Garcia
+.\" Licensed under MIT
+.
+.TH ZIPET 1 "2024-03-18" "zipet 0.1.0" "User Commands"
+.
+.SH NAME
+zipet \- a blazing-fast command snippet manager with TUI, workflows, packs, and fuzzy search
+.
+.SH SYNOPSIS
+.B zipet
+.RB [ command ]
+.RI [ options ]
+.RI [ arguments ]
+.
+.SH DESCRIPTION
+.B zipet
+saves, organizes, and executes shell commands (snippets) with support for
+parameterized templates, workflows, fuzzy search, installable packs, and
+workspaces. All data is stored as human-readable TOML files.
+.PP
+When invoked without arguments,
+.B zipet
+launches an interactive terminal user interface (TUI) with vim-style keybindings.
+When invoked with an unknown command, it is treated as an implicit
+.B run
+query with fuzzy search.
+.
+.SH COMMANDS
+.
+.SS "General"
+.TP
+.B init
+Initialize the configuration directory at
+.IR ~/.config/zipet/ .
+Creates default config, snippet directory, workflow directory, and example snippets.
+.TP
+.B help\fR, \fB\-\-help\fR, \fB\-h
+Show a summary of available commands.
+.TP
+.B version\fR, \fB\-\-version\fR, \fB\-v
+Print the version string.
+.
+.SS "Snippet Management"
+.TP
+.BI "add " "[cmd]"
+Add a new snippet interactively. If
+.I cmd
+is given, use it as the command text. Otherwise prompt for it.
+.TP
+.B add \-\-last
+Capture the last command executed in the current shell and save it as a snippet.
+.TP
+.BI "run " "query"
+Fuzzy-search snippets matching
+.I query
+and execute the result.
+If there is exactly one match, it runs immediately.
+If there are multiple, a numbered list is shown for selection.
+An exact name match bypasses fuzzy search.
+.TP
+.BI "edit " "name"
+Open the TOML file containing snippet
+.I name
+in
+.BR $EDITOR .
+.TP
+.BI "rm " "name"
+Delete the snippet called
+.IR name .
+.TP
+.BI "ls " "[--tags=TAG]"
+List all snippets. Optionally filter by
+.IR TAG .
+.TP
+.B tags
+List all tags with their snippet counts.
+.
+.SS "Workflow Management"
+See
+.BR zipet\-workflow (1)
+for full details.
+.TP
+.B workflow add
+.TQ
+.B wf add
+Create a new workflow interactively.
+.TP
+.BI "workflow run " "name"
+Execute a workflow.
+.TP
+.B workflow ls
+List all workflows.
+.TP
+.BI "workflow show " "name"
+Display workflow steps and parameters.
+.TP
+.BI "workflow rm " "name"
+Delete a workflow.
+.TP
+.BI "workflow edit " "name"
+Edit a workflow in
+.BR $EDITOR .
+.
+.SS "Parallel Execution"
+.TP
+.BI "parallel " "name1 name2 ..." " [-- key=val ...]"
+.TQ
+.BI "par " "name1 name2 ..." " [-- key=val ...]"
+Run multiple snippets and/or workflows simultaneously using threads.
+Parameter overrides can be supplied after
+.BR \-\- .
+Results display exit codes, duration, stdout, and stderr for each item.
+.
+.SS "Pack Management"
+See
+.BR zipet\-pack (1)
+for full details.
+.TP
+.B pack ls
+List available packs and their install status.
+.TP
+.BI "pack install " "name|file|url" " [--workspace=WS]"
+Install a pack from the built-in registry, a local TOML file, or a URL.
+.TP
+.BI "pack uninstall " "name"
+Remove an installed pack and its snippets.
+.TP
+.BI "pack create " "name" " [--namespace=NS]"
+Create a distributable pack from existing snippets.
+.TP
+.BI "pack info " "name"
+Show details about a pack.
+.
+.SS "Workspace Management"
+See
+.BR zipet\-workspace (1)
+for full details.
+.TP
+.BI "workspace create " "name" " [--path=DIR]"
+.TQ
+.BI "ws create " "name" " [--path=DIR]"
+Create a new workspace, optionally linked to a project directory.
+.TP
+.BI "workspace use " "name"
+.TQ
+.BI "ws use " "name"
+Switch to a workspace. Use
+.B \-\-global
+to return to the global workspace.
+.TP
+.B workspace ls
+List all workspaces.
+.TP
+.B workspace current
+Show the currently active workspace.
+.TP
+.BI "workspace rm " "name"
+Delete a workspace.
+.
+.SS "Import / Export"
+.TP
+.BI "export " "[--json]"
+Export all snippets to stdout in TOML format (default) or JSON.
+.TP
+.BI "import " "file|url"
+Import snippets from a local TOML file or a URL.
+Duplicate snippets are automatically detected and skipped.
+.
+.SS "Shell Integration"
+.TP
+.BI "shell " "bash|zsh|fish"
+Output shell integration code to be evaluated in the user's shell config.
+.PP
+.RS
+.nf
+# Bash (~/.bashrc)
+eval "$(zipet shell bash)"
+
+# Zsh (~/.zshrc)
+eval "$(zipet shell zsh)"
+
+# Fish (~/.config/fish/config.fish)
+zipet shell fish | source
+.fi
+.RE
+.PP
+Once loaded, the following shortcuts are available:
+.TP
+.B Ctrl\-S
+Open the snippet picker and insert the selected command into the command line.
+.TP
+.B Ctrl\-X Ctrl\-S
+Save the current command line as a snippet (bash/zsh only).
+.
+.SH TUI KEYBINDINGS
+When
+.B zipet
+is launched without arguments, the TUI is displayed. Navigation uses
+vim-style keys:
+.PP
+.TS
+tab(;);
+lb lb
+l l.
+Key;Action
+_
+j / k;Navigate down / up
+gg / G;Jump to first / last item
+Ctrl\-D / Ctrl\-U;Page down / up
+/;Focus search bar
+Enter;Run selected snippet
+a;Add new snippet (inline form)
+w;Create new workflow (inline wizard)
+e;Edit snippet in $EDITOR
+d;Delete (with confirmation)
+y;Yank command to clipboard
+p;Paste from clipboard
+o;Open TOML file in editor
+i;Full info panel
+Space;Toggle preview pane
+t;Filter by tag
+W;Workspace picker
+P;Pack browser
+?;Toggle help sidebar
+:q;Quit
+:w;Save all
+:wq;Save & quit
+:tags;Tag picker
+:export;Export snippets
+:ws;Workspace picker
+:packs;Pack browser
+.TE
+.
+.SH TEMPLATES
+Snippets support parameterized placeholders using the
+.B {{param}}
+syntax. Parameters are prompted at execution time.
+.PP
+.SS "Parameter types"
+.TP
+.B prompt + default
+Simple text input with a default value.
+.TP
+.B options
+Predefined list of values — user picks from a numbered menu.
+.TP
+.B command
+Dynamic options populated by running a shell command.
+.
+.SS "Built-in variables"
+The following variables are resolved automatically:
+.PP
+.TS
+tab(;);
+lb lb
+l l.
+Variable;Value
+_
+{{user}};Current username
+{{hostname}};Machine hostname
+{{cwd}};Current working directory
+{{date}};Today's date (YYYY\-MM\-DD)
+{{datetime}};ISO 8601 datetime
+{{timestamp}};Unix timestamp
+{{os}};Operating system
+{{arch}};CPU architecture
+{{git_branch}};Current git branch
+{{git_sha}};Short git commit SHA
+{{git_root}};Git repository root path
+{{clipboard}};Clipboard contents (X11/Wayland/macOS)
+.TE
+.
+.SH ENVIRONMENT
+.TP
+.B XDG_CONFIG_HOME
+If set, zipet stores its configuration under
+.IR $XDG_CONFIG_HOME/zipet/ .
+Defaults to
+.IR ~/.config/zipet/ .
+.TP
+.B EDITOR
+Editor used by
+.B edit
+and
+.B workflow edit
+commands.
+.
+.SH FILES
+.TP
+.I ~/.config/zipet/config.toml
+Global configuration file. See
+.BR zipet.toml (5).
+.TP
+.I ~/.config/zipet/snippets/
+Directory containing snippet TOML files organized by namespace.
+See
+.BR zipet\-snippets (5).
+.TP
+.I ~/.config/zipet/workflows/
+Workflow definition files.
+.TP
+.I ~/.config/zipet/packs/
+Installed pack metadata and built-in pack registry.
+.TP
+.I ~/.config/zipet/workspaces/
+Workspace directories, each with its own snippets and workflows.
+.TP
+.I ~/.config/zipet/active_workspace
+File containing the name of the currently active workspace.
+.
+.SH EXAMPLES
+.nf
+# Initialize and see example snippets
+zipet init
+zipet ls
+
+# Add a parameterized snippet
+zipet add "docker build \-t {{image}}:{{tag}} ."
+
+# Fuzzy search and run
+zipet run docker
+zipet dk              # implicit run
+
+# Export and share
+zipet export > team\-snippets.toml
+zipet import https://example.com/snippets.toml
+
+# Parallel execution
+zipet parallel check\-disk check\-mem check\-net
+zipet par deploy\-api deploy\-web \-\- env=prod
+.fi
+.
+.SH SEE ALSO
+.BR zipet\-workflow (1),
+.BR zipet\-pack (1),
+.BR zipet\-workspace (1),
+.BR zipet\-snippets (5),
+.BR zipet.toml (5)
+.
+.SH AUTHORS
+Luis Garcia
+.UR https://github.com/Luisgarcav/zipet
+.UE
+.
+.SH LICENSE
+MIT License

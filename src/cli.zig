@@ -1464,11 +1464,17 @@ fn cmdWorkspace(allocator: std.mem.Allocator, args: []const []const u8, cfg: con
         writeOut("Usage: zipet workspace <subcommand>\n\n");
         writeOut("Subcommands:\n");
         writeOut("  ls               List all workspaces\n");
-        writeOut("  create <name>    Create a new workspace\n");
+        writeOut("  create <name>    Create a new workspace (links to current dir by default)\n");
+        writeOut("  create <name> --path=<dir>  Create linked to specific directory\n");
+        writeOut("  create <name> --no-path     Create without directory link\n");
         writeOut("  use <name>       Switch to a workspace\n");
         writeOut("  use --global     Switch back to global (default)\n");
         writeOut("  rm <name>        Delete a workspace\n");
         writeOut("  current          Show active workspace\n");
+        writeOut("\nDirectory auto-detection:\n");
+        writeOut("  When a workspace is linked to a directory, zipet auto-activates\n");
+        writeOut("  it when you run commands from that directory (or subdirectories).\n");
+        writeOut("  Workspace snippets are merged with global snippets.\n");
         writeOut("\nAliases: zipet ws\n");
         return;
     }
@@ -1545,10 +1551,30 @@ fn cmdWorkspaceList(allocator: std.mem.Allocator, cfg: config.Config) !void {
 fn cmdWorkspaceCreate(allocator: std.mem.Allocator, args: []const []const u8, cfg: config.Config) !void {
     const name = args[0];
     var project_path: ?[]const u8 = null;
+    var no_path = false;
 
     for (args[1..]) |arg| {
         if (std.mem.startsWith(u8, arg, "--path=")) {
             project_path = arg["--path=".len..];
+        } else if (std.mem.eql(u8, arg, "--no-path")) {
+            no_path = true;
+        }
+    }
+
+    // Default: use current directory as project path (unless --no-path)
+    var cwd_buf: ?[]const u8 = null;
+    defer if (cwd_buf) |c| allocator.free(c);
+
+    if (project_path == null and !no_path) {
+        cwd_buf = std.fs.cwd().realpathAlloc(allocator, ".") catch null;
+        if (cwd_buf) |c| {
+            printOut(allocator, "Link to current directory? ({s})\n", .{c});
+            writeOut("(Y/n): ");
+            var yn_buf: [64]u8 = undefined;
+            const yn = readLine(&yn_buf) orelse return;
+            if (yn.len == 0 or yn[0] == 'y' or yn[0] == 'Y') {
+                project_path = c;
+            }
         }
     }
 
@@ -1565,6 +1591,10 @@ fn cmdWorkspaceCreate(allocator: std.mem.Allocator, args: []const []const u8, cf
     };
 
     printOut(allocator, "\x1b[32m✓ Workspace '{s}' created\x1b[0m\n", .{name});
+    if (project_path) |pp| {
+        printOut(allocator, "  Linked to: {s}\n", .{pp});
+        printOut(allocator, "  Auto-activates when you run zipet from this directory\n", .{});
+    }
     printOut(allocator, "  Switch to it: zipet workspace use {s}\n", .{name});
     printOut(allocator, "  Install packs: zipet pack install pentesting --workspace={s}\n", .{name});
 }
@@ -1617,10 +1647,28 @@ fn cmdWorkspaceRemove(allocator: std.mem.Allocator, name: []const u8, cfg: confi
 }
 
 fn cmdWorkspaceCurrent(allocator: std.mem.Allocator, cfg: config.Config) !void {
+    // Check if auto-detected by directory
+    const auto_detected = workspace_mod.detectWorkspaceByDir(allocator, cfg) catch null;
+    defer if (auto_detected) |ad| allocator.free(ad);
+
     const active = try workspace_mod.getActiveWorkspace(allocator, cfg);
     if (active) |a| {
         defer allocator.free(a);
-        printOut(allocator, "Active workspace: \x1b[1;36m{s}\x1b[0m\n", .{a});
+        printOut(allocator, "Active workspace: \x1b[1;36m{s}\x1b[0m", .{a});
+        if (auto_detected != null and std.mem.eql(u8, auto_detected.?, a)) {
+            writeOut(" \x1b[2m(auto-detected from directory)\x1b[0m");
+        }
+        writeOut("\n");
+
+        // Show linked path if available
+        const workspaces = try workspace_mod.list(allocator, cfg);
+        defer workspace_mod.freeWorkspaces(allocator, workspaces);
+        for (workspaces) |ws| {
+            if (std.mem.eql(u8, ws.name, a) and ws.path.len > 0) {
+                printOut(allocator, "  Linked to: {s}\n", .{ws.path});
+                break;
+            }
+        }
     } else {
         writeOut("Active workspace: \x1b[1;36mglobal\x1b[0m (default)\n");
     }

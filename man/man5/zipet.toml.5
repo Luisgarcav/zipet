@@ -1,0 +1,70 @@
+.\" zipet.toml(5) — configuration file format
+.
+.TH ZIPET.TOML 5 "2024-03-18" "zipet 0.1.0" "File Formats"
+.
+.SH NAME
+zipet.toml \- zipet configuration file
+.
+.SH SYNOPSIS
+.I ~/.config/zipet/config.toml
+.
+.SH DESCRIPTION
+The
+.B config.toml
+file controls global settings for
+.BR zipet (1).
+It is created automatically by
+.B zipet init
+and resides in the zipet configuration directory
+.RI ( $XDG_CONFIG_HOME/zipet/
+or
+.IR ~/.config/zipet/ ).
+.
+.SH SECTIONS
+.
+.SS [general]
+.TP
+.B accent_color \fR(string, default: \fB"cyan"\fR)
+Color theme for the TUI. Supported values:
+.BR cyan ", " green ", " yellow ", " magenta ", " red ", " blue ", " white .
+.TP
+.B preview \fR(boolean, default: \fBtrue\fR)
+Whether to show the command preview pane in the TUI by default.
+.
+.SS [shell]
+.TP
+.B shell \fR(string, default: \fB"/bin/sh"\fR)
+Shell used to execute snippet commands. Can be an absolute path to any
+POSIX-compatible shell.
+.TP
+.B editor \fR(string, default: \fB"vim"\fR)
+Editor launched by the
+.B edit
+and
+.B workflow edit
+commands. Overridden by the
+.B $EDITOR
+environment variable if set.
+.
+.SH EXAMPLE
+.nf
+[general]
+accent_color = "green"
+preview = true
+
+[shell]
+shell = "/bin/bash"
+editor = "nvim"
+.fi
+.
+.SH FILES
+.TP
+.I ~/.config/zipet/config.toml
+Default location of this file.
+.
+.SH SEE ALSO
+.BR zipet (1),
+.BR zipet\-snippets (5)
+.
+.SH AUTHORS
+Luis Garcia

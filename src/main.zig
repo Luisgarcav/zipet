@@ -16,9 +16,14 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, args);
 
     // Load config
-    const cfg = config.load(gpa) catch config.Config.default();
+    var cfg = config.load(gpa) catch config.Config.default();
 
-    // Initialize store
+    // Detect active workspace (auto-detect by directory or explicit)
+    const active_ws = workspace.getActiveWorkspace(gpa, cfg) catch null;
+    defer if (active_ws) |aws| gpa.free(aws);
+    cfg.active_workspace = active_ws;
+
+    // Initialize store (loads snippets from the active workspace or global)
     var snip_store = store.Store.init(gpa, cfg) catch |err| {
         std.debug.print("Error: could not initialize store: {}\n", .{err});
         return err;

@@ -36,6 +36,7 @@ pub const Mode = enum {
     workspace_picker,
     pack_browser,
     pack_preview,
+    workflow_form,
 };
 
 // ── Text Field ──
@@ -165,6 +166,125 @@ pub const ParamInputState = struct {
     }
 };
 
+// ── Workflow form state ──
+pub const WF_MAX_STEPS = 20;
+
+pub const WorkflowFormPhase = enum { info, steps };
+
+pub const OnFailOption = enum {
+    stop,
+    @"continue",
+    skip_rest,
+
+    pub fn label(self: OnFailOption) []const u8 {
+        return switch (self) {
+            .stop => "stop",
+            .@"continue" => "continue",
+            .skip_rest => "skip_rest",
+        };
+    }
+
+    pub fn next(self: OnFailOption) OnFailOption {
+        return switch (self) {
+            .stop => .@"continue",
+            .@"continue" => .skip_rest,
+            .skip_rest => .stop,
+        };
+    }
+};
+
+pub const StepEntry = struct {
+    name: [FIELD_CAP]u8 = [_]u8{0} ** FIELD_CAP,
+    name_len: usize = 0,
+    is_snippet: bool = false,
+    cmd: [FIELD_CAP]u8 = [_]u8{0} ** FIELD_CAP,
+    cmd_len: usize = 0,
+    on_fail: OnFailOption = .stop,
+
+    pub fn nameSlice(self: *const StepEntry) []const u8 {
+        return self.name[0..self.name_len];
+    }
+
+    pub fn cmdSlice(self: *const StepEntry) []const u8 {
+        return self.cmd[0..self.cmd_len];
+    }
+
+    pub fn setName(self: *StepEntry, s: []const u8) void {
+        const n = @min(s.len, FIELD_CAP);
+        @memcpy(self.name[0..n], s[0..n]);
+        self.name_len = n;
+    }
+
+    pub fn setCmd(self: *StepEntry, s: []const u8) void {
+        const n = @min(s.len, FIELD_CAP);
+        @memcpy(self.cmd[0..n], s[0..n]);
+        self.cmd_len = n;
+    }
+};
+
+pub const WorkflowFormState = struct {
+    pub const F_NAME = 0;
+    pub const F_DESC = 1;
+    pub const F_TAGS = 2;
+    pub const F_NS = 3;
+
+    phase: WorkflowFormPhase = .info,
+
+    // Info phase fields (reuse TextField)
+    info_fields: [4]TextField = [_]TextField{.{}} ** 4,
+    info_labels: [4][]const u8 = .{ "Name", "Description", "Tags", "Namespace" },
+    info_active: usize = 0,
+    error_msg: ?[]const u8 = null,
+
+    // Steps phase
+    steps: [WF_MAX_STEPS]StepEntry = [_]StepEntry{.{}} ** WF_MAX_STEPS,
+    step_count: usize = 0,
+    step_cursor: usize = 0, // which step is selected in the list
+    step_scroll: usize = 0,
+
+    // Current step being edited (the "new step" form at the bottom)
+    new_step: StepEntry = .{},
+    /// 0=name, 1=type toggle, 2=cmd/snippet, 3=on_fail toggle
+    new_step_field: usize = 0,
+
+    // Whether we're editing the new step fields or browsing the step list
+    editing_new_step: bool = true,
+
+    pub fn init() WorkflowFormState {
+        var s = WorkflowFormState{};
+        s.info_fields[F_NS].setText("general");
+        return s;
+    }
+
+    pub fn activeInfoField(self: *WorkflowFormState) *TextField {
+        return &self.info_fields[self.info_active];
+    }
+
+    pub fn addCurrentStep(self: *WorkflowFormState) bool {
+        if (self.step_count >= WF_MAX_STEPS) return false;
+        if (self.new_step.name_len == 0) return false;
+        if (self.new_step.cmd_len == 0) return false;
+
+        self.steps[self.step_count] = self.new_step;
+        self.step_count += 1;
+        self.new_step = .{};
+        self.new_step_field = 0;
+        return true;
+    }
+
+    pub fn removeStep(self: *WorkflowFormState, idx: usize) void {
+        if (idx >= self.step_count) return;
+        var i = idx;
+        while (i + 1 < self.step_count) : (i += 1) {
+            self.steps[i] = self.steps[i + 1];
+        }
+        self.step_count -= 1;
+        if (self.step_cursor > 0 and self.step_cursor >= self.step_count) {
+            self.step_cursor = if (self.step_count > 0) self.step_count - 1 else 0;
+        }
+    }
+};
+
 // ── Output line style ──
 pub const LineStyle = enum { normal, header, dim, success, err, cmd };
 
@@ -236,6 +356,7 @@ pub const State = struct {
     // Sub-states
     form: FormState = .{},
     param_input: ParamInputState = .{},
+    wf_form: WorkflowFormState = .{},
     output: OutputBuf = undefined,
     output_scroll: usize = 0,
     output_title: []const u8 = "",

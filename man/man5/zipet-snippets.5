@@ -1,0 +1,166 @@
+.\" zipet-snippets(5) — snippet and workflow TOML file format
+.
+.TH ZIPET\-SNIPPETS 5 "2024-03-18" "zipet 0.1.0" "File Formats"
+.
+.SH NAME
+zipet\-snippets \- format of zipet snippet and workflow TOML files
+.
+.SH DESCRIPTION
+Snippets and workflows are stored as TOML files in the
+.I snippets/
+and
+.I workflows/
+directories under the zipet configuration root (typically
+.IR ~/.config/zipet/ ).
+Files are organized by namespace — each
+.I <namespace>.toml
+file can contain multiple snippets or workflows.
+.
+.SH SNIPPET FORMAT
+Each snippet is defined as a table under
+.BR [snippets.<name>] .
+.
+.SS Required keys
+.TP
+.B cmd \fR(string)
+The command to execute. May contain
+.B {{param}}
+placeholders that are resolved at runtime.
+.
+.SS Optional keys
+.TP
+.B desc \fR(string)
+A human-readable description of the snippet.
+.TP
+.B tags \fR(array of strings)
+Tags for categorization and filtering.
+.
+.SS Parameters
+Parameters are defined in a sub-table
+.BR [snippets.<name>.params.<param>] .
+Each parameter supports the following keys:
+.TP
+.B prompt \fR(string)
+Text displayed when prompting the user for a value.
+.TP
+.B default \fR(string)
+Default value if the user presses Enter without typing.
+.TP
+.B options \fR(array of strings)
+A fixed list of choices presented as a numbered menu.
+.TP
+.B command \fR(string)
+A shell command whose output lines become the list of choices.
+.
+.SH WORKFLOW FORMAT
+Workflows are stored in
+.I workflows/<namespace>.toml
+and defined under
+.BR [workflows.<name>] .
+.
+.SS Keys
+.TP
+.B desc \fR(string)
+Description of the workflow.
+.TP
+.B tags \fR(array of strings)
+Tags for filtering.
+.TP
+.B steps \fR(array of tables)
+Ordered list of steps. Each step has:
+.RS
+.TP
+.B name \fR(string)
+Step identifier.
+.TP
+.B cmd \fR(string, optional)
+Inline command to execute.
+.TP
+.B snippet \fR(string, optional)
+Name of an existing snippet to run instead of an inline command.
+.TP
+.B on_fail \fR(string, optional)
+Failure policy:
+.BR stop " (default), " continue ", or " skip_rest .
+.RE
+.
+.SS Workflow parameters
+Parameters are defined under
+.BR [workflows.<name>.params.<param>]
+and use the same schema as snippet parameters.
+.
+.SS Inter-step variables
+.TP
+.B {{prev_stdout}}
+Standard output of the previous step.
+.TP
+.B {{prev_exit}}
+Exit code of the previous step.
+.
+.SH EXAMPLES
+.SS Snippet file
+.nf
+# ~/.config/zipet/snippets/docker.toml
+
+[snippets.docker\-build]
+desc = "Build a Docker image"
+tags = ["docker", "build"]
+cmd = "docker build \-t {{image}}:{{tag}} ."
+
+[snippets.docker\-build.params]
+image = { prompt = "Image name", default = "myapp" }
+tag   = { prompt = "Tag",        default = "latest" }
+
+[snippets.docker\-ps]
+desc = "List running containers"
+tags = ["docker"]
+cmd = "docker ps \-\-format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'"
+.fi
+.
+.SS Snippet with dynamic options
+.nf
+[snippets.git\-checkout]
+desc = "Switch git branch"
+tags = ["git"]
+cmd = "git checkout {{branch}}"
+
+[snippets.git\-checkout.params]
+branch = { prompt = "Branch", command = "git branch \-\-format='%(refname:short)'" }
+.fi
+.
+.SS Workflow file
+.nf
+# ~/.config/zipet/workflows/general.toml
+
+[workflows.deploy\-all]
+desc = "Full deployment pipeline"
+tags = ["deploy", "ci"]
+
+[[workflows.deploy\-all.steps]]
+name = "test"
+cmd = "make test"
+on_fail = "stop"
+
+[[workflows.deploy\-all.steps]]
+name = "build"
+snippet = "docker\-build"
+on_fail = "stop"
+
+[[workflows.deploy\-all.steps]]
+name = "push"
+cmd = "docker push {{image}}:{{tag}}"
+on_fail = "stop"
+
+[workflows.deploy\-all.params]
+image = { prompt = "Image name", default = "myapp" }
+tag   = { prompt = "Tag",        default = "latest" }
+.fi
+.
+.SH SEE ALSO
+.BR zipet (1),
+.BR zipet\-workflow (1),
+.BR zipet.toml (5),
+.BR toml (5)
+.
+.SH AUTHORS
+Luis Garcia

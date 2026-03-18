@@ -27,6 +27,7 @@ pub fn handleKeyPress(allocator: std.mem.Allocator, key: Key, state: *State, sni
         .workspace_picker => try handleWorkspacePickerKey(allocator, key, state, snip_store, cfg),
         .pack_browser => try handlePackBrowserKey(allocator, key, state, snip_store, cfg),
         .pack_preview => try handlePackPreviewKey(allocator, key, state, snip_store, cfg),
+        .workflow_form => try handleWorkflowFormKey(allocator, key, state, snip_store, cfg),
         .info => {
             if (key.matches('i', .{}) or key.matches(Key.escape, .{}) or key.matches('q', .{}))
                 state.mode = .normal;
@@ -122,6 +123,10 @@ fn handleNormalKey(allocator: std.mem.Allocator, key: Key, state: *State, snip_s
     } else if (key.matches('a', .{})) {
         state.form = FormState.init(.add);
         state.mode = .form;
+        state.pending_g = false;
+    } else if (key.matches('w', .{})) {
+        state.wf_form = t.WorkflowFormState.init();
+        state.mode = .workflow_form;
         state.pending_g = false;
     } else if (key.matches('e', .{})) {
         if (total > 0 and state.cursor < total) {
@@ -538,6 +543,155 @@ fn handlePackPreviewKey(allocator: std.mem.Allocator, key: Key, state: *State, s
                 state.filtered_indices = utils.updateFilter(allocator, snip_store, "") catch &.{};
                 state.message = "✓ Pack installed!";
             }
+        }
+    }
+}
+
+fn handleWorkflowFormKey(allocator: std.mem.Allocator, key: Key, state: *State, snip_store: *store.Store, cfg: config.Config) !void {
+    const wf = &state.wf_form;
+
+    if (key.matches(Key.escape, .{})) {
+        if (wf.phase == .steps) {
+            // Go back to info phase
+            wf.phase = .info;
+            return;
+        }
+        state.mode = .normal;
+        return;
+    }
+
+    if (key.matches('s', .{ .ctrl = true })) {
+        // Save workflow
+        if (wf.phase == .info) {
+            // Validate and move to steps
+            const name = wf.info_fields[t.WorkflowFormState.F_NAME].text();
+            if (name.len == 0) {
+                wf.error_msg = "Name is required";
+                return;
+            }
+            wf.error_msg = null;
+            wf.phase = .steps;
+            return;
+        }
+        // In steps phase, save
+        try actions.submitWorkflowForm(allocator, state, snip_store, cfg);
+        return;
+    }
+
+    switch (wf.phase) {
+        .info => {
+            if (key.matches(Key.tab, .{}) or key.matches(Key.down, .{})) {
+                if (wf.info_active + 1 < 4) wf.info_active += 1 else wf.info_active = 0;
+                return;
+            }
+            if (key.matches(Key.tab, .{ .shift = true }) or key.matches(Key.up, .{})) {
+                if (wf.info_active > 0) wf.info_active -= 1 else wf.info_active = 3;
+                return;
+            }
+            if (key.matches(Key.enter, .{})) {
+                const name = wf.info_fields[t.WorkflowFormState.F_NAME].text();
+                if (name.len == 0) {
+                    wf.error_msg = "Name is required";
+                    return;
+                }
+                wf.error_msg = null;
+                wf.phase = .steps;
+                return;
+            }
+
+            utils.handleTextFieldKey(wf.activeInfoField(), key);
+        },
+        .steps => {
+            if (wf.editing_new_step) {
+                // Editing the new step form
+                if (key.matches(Key.tab, .{}) or key.matches(Key.down, .{})) {
+                    if (wf.new_step_field + 1 < 4) wf.new_step_field += 1 else wf.new_step_field = 0;
+                    return;
+                }
+                if (key.matches(Key.tab, .{ .shift = true }) or key.matches(Key.up, .{})) {
+                    if (wf.new_step_field > 0) wf.new_step_field -= 1 else wf.new_step_field = 3;
+                    return;
+                }
+                if (key.matches(Key.enter, .{})) {
+                    if (wf.new_step_field == 1) {
+                        // Toggle type
+                        wf.new_step.is_snippet = !wf.new_step.is_snippet;
+                        return;
+                    }
+                    if (wf.new_step_field == 3) {
+                        // Toggle on_fail
+                        wf.new_step.on_fail = wf.new_step.on_fail.next();
+                        return;
+                    }
+                    // Try to add the step
+                    if (wf.addCurrentStep()) {
+                        wf.error_msg = null;
+                    } else {
+                        wf.error_msg = "Step name and command required";
+                    }
+                    return;
+                }
+                // Switch to list browsing with Ctrl+L
+                if (key.matches('l', .{ .ctrl = true })) {
+                    if (wf.step_count > 0) {
+                        wf.editing_new_step = false;
+                        wf.step_cursor = 0;
+                    }
+                    return;
+                }
+
+                // Text input for name (field 0) and cmd (field 2)
+                if (wf.new_step_field == 0) {
+                    handleStepTextField(&wf.new_step.name, &wf.new_step.name_len, key);
+                } else if (wf.new_step_field == 2) {
+                    handleStepTextField(&wf.new_step.cmd, &wf.new_step.cmd_len, key);
+                } else if (wf.new_step_field == 1) {
+                    // Type toggle on space
+                    if (key.matches(' ', .{})) {
+                        wf.new_step.is_snippet = !wf.new_step.is_snippet;
+                    }
+                } else if (wf.new_step_field == 3) {
+                    // on_fail toggle on space
+                    if (key.matches(' ', .{})) {
+                        wf.new_step.on_fail = wf.new_step.on_fail.next();
+                    }
+                }
+            } else {
+                // Browsing step list
+                if (key.matches('j', .{}) or key.matches(Key.down, .{})) {
+                    if (wf.step_count > 0 and wf.step_cursor + 1 < wf.step_count)
+                        wf.step_cursor += 1;
+                } else if (key.matches('k', .{}) or key.matches(Key.up, .{})) {
+                    if (wf.step_cursor > 0) wf.step_cursor -= 1;
+                } else if (key.matches('d', .{})) {
+                    // Delete selected step
+                    wf.removeStep(wf.step_cursor);
+                    if (wf.step_count == 0) wf.editing_new_step = true;
+                } else if (key.matches(Key.tab, .{}) or key.matches('i', .{}) or key.matches(Key.enter, .{})) {
+                    // Switch back to new step form
+                    wf.editing_new_step = true;
+                }
+            }
+        },
+    }
+}
+
+fn handleStepTextField(buf: *[t.FIELD_CAP]u8, len: *usize, key: Key) void {
+    if (key.matches(Key.backspace, .{})) {
+        if (len.* > 0) len.* -= 1;
+    } else if (key.matches('u', .{ .ctrl = true })) {
+        len.* = 0;
+    } else {
+        if (key.text) |text| {
+            for (text) |c| {
+                if (c >= 32 and c < 127 and len.* < t.FIELD_CAP - 1) {
+                    buf[len.*] = c;
+                    len.* += 1;
+                }
+            }
+        } else if (key.codepoint >= 32 and key.codepoint < 127 and len.* < t.FIELD_CAP - 1) {
+            buf[len.*] = @intCast(key.codepoint);
+            len.* += 1;
         }
     }
 }

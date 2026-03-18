@@ -1,0 +1,109 @@
+.\" zipet-workspace(1) — workspace management
+.
+.TH ZIPET\-WORKSPACE 1 "2024-03-18" "zipet 0.1.0" "User Commands"
+.
+.SH NAME
+zipet\-workspace \- organize snippets by project, context, or environment
+.
+.SH SYNOPSIS
+.B zipet workspace
+.I subcommand
+.RI [ arguments ]
+.br
+.B zipet ws
+.I subcommand
+.RI [ arguments ]
+.
+.SH DESCRIPTION
+Workspaces provide isolated collections of snippets and workflows.
+Each workspace has its own snippet and workflow directories under
+.IR ~/.config/zipet/workspaces/<name>/ .
+.PP
+.B ws
+is an alias for
+.BR workspace .
+.PP
+A special
+.B global
+workspace exists by default and is used when no workspace is active.
+.
+.SH SUBCOMMANDS
+.TP
+.BI "create " "name" " [--path=DIR]"
+Create a new workspace called
+.IR name .
+If
+.BI \-\-path= DIR
+is given, the workspace is linked to that project directory.
+.TP
+.BI "use " "name"
+Switch to the workspace called
+.IR name .
+All subsequent snippet operations (add, ls, run, etc.) will use this
+workspace's snippets.
+.TP
+.B use \-\-global
+Switch back to the global workspace.
+.TP
+.B ls
+List all workspaces. The currently active workspace is highlighted.
+.TP
+.B current
+Print the name of the currently active workspace.
+.TP
+.BI "rm " "name"
+Delete the workspace called
+.I name
+and all its snippets and workflows.
+.
+.SH FILES
+.TP
+.I ~/.config/zipet/workspaces/<name>/
+Root directory for a workspace.
+.TP
+.I ~/.config/zipet/workspaces/<name>/workspace.toml
+Workspace metadata (linked path, etc.).
+.TP
+.I ~/.config/zipet/workspaces/<name>/snippets/
+Snippets belonging to this workspace.
+.TP
+.I ~/.config/zipet/workspaces/<name>/workflows/
+Workflows belonging to this workspace.
+.TP
+.I ~/.config/zipet/active_workspace
+File containing the name of the currently active workspace.
+.
+.SH EXAMPLES
+.nf
+# Create a workspace linked to a project
+zipet workspace create backend \-\-path=/home/user/projects/api
+
+# Switch to it
+zipet ws use backend
+
+# Check which workspace is active
+zipet ws current
+
+# List all workspaces
+zipet ws ls
+
+# Return to global
+zipet ws use \-\-global
+
+# Delete a workspace
+zipet ws rm backend
+.fi
+.
+.SH TUI ACCESS
+In the TUI, press
+.B W
+or type
+.B :ws
+to open the workspace picker.
+.
+.SH SEE ALSO
+.BR zipet (1),
+.BR zipet\-pack (1)
+.
+.SH AUTHORS
+Luis Garcia

@@ -232,6 +232,139 @@ pub fn executeWorkflow(allocator: std.mem.Allocator, state: *State, snip: *const
     state.mode = .output_view;
 }
 
+pub fn submitWorkflowForm(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store, cfg: config.Config) !void {
+    const wf = &state.wf_form;
+
+    const name = wf.info_fields[t.WorkflowFormState.F_NAME].text();
+    if (name.len == 0) {
+        wf.error_msg = "Name is required";
+        return;
+    }
+    if (wf.step_count == 0) {
+        wf.error_msg = "At least one step is required";
+        return;
+    }
+
+    const desc = wf.info_fields[t.WorkflowFormState.F_DESC].text();
+    const tags_str = wf.info_fields[t.WorkflowFormState.F_TAGS].text();
+    const ns = wf.info_fields[t.WorkflowFormState.F_NS].text();
+    const namespace = if (ns.len > 0) ns else "general";
+
+    // Parse tags
+    var tags: std.ArrayList([]const u8) = .{};
+    if (tags_str.len > 0) {
+        var iter = std.mem.splitScalar(u8, tags_str, ',');
+        while (iter.next()) |tag| {
+            const trimmed = std.mem.trim(u8, tag, " \t");
+            if (trimmed.len > 0)
+                tags.append(allocator, allocator.dupe(u8, trimmed) catch continue) catch {};
+        }
+    }
+
+    // Build steps
+    var steps: std.ArrayList(workflow_mod.Step) = .{};
+    for (0..wf.step_count) |i| {
+        const se = &wf.steps[i];
+        const step_name_slice = se.nameSlice();
+        const step_cmd_slice = se.cmdSlice();
+
+        try steps.append(allocator, .{
+            .name = try allocator.dupe(u8, step_name_slice),
+            .cmd = if (!se.is_snippet) try allocator.dupe(u8, step_cmd_slice) else null,
+            .snippet_ref = if (se.is_snippet) try allocator.dupe(u8, step_cmd_slice) else null,
+            .on_fail = switch (se.on_fail) {
+                .stop => .stop,
+                .@"continue" => .@"continue",
+                .skip_rest => .skip_rest,
+            },
+            .param_overrides = &.{},
+        });
+    }
+
+    const owned_steps = try steps.toOwnedSlice(allocator);
+
+    // Detect params from all steps
+    var params_list: std.ArrayList(template.Param) = .{};
+    for (owned_steps) |step| {
+        if (step.cmd) |cmd| {
+            const detected = try template.detectParams(allocator, cmd);
+            defer allocator.free(detected);
+            for (detected) |pname| {
+                if (std.mem.eql(u8, pname, "prev_stdout") or std.mem.eql(u8, pname, "prev_exit")) {
+                    allocator.free(pname);
+                    continue;
+                }
+                var found = false;
+                for (params_list.items) |existing| {
+                    if (std.mem.eql(u8, existing.name, pname)) {
+                        found = true;
+                        allocator.free(pname);
+                        break;
+                    }
+                }
+                if (!found) {
+                    try params_list.append(allocator, .{
+                        .name = pname,
+                        .prompt = null,
+                        .default = null,
+                        .options = null,
+                        .command = null,
+                    });
+                }
+            }
+        }
+    }
+    const owned_params = try params_list.toOwnedSlice(allocator);
+
+    // Build display command (step flow summary)
+    var cmd_buf: std.ArrayList(u8) = .{};
+    const cmd_writer = cmd_buf.writer(allocator);
+    for (owned_steps, 0..) |step, si| {
+        if (si > 0) try cmd_writer.writeAll(" → ");
+        if (step.snippet_ref) |ref| {
+            try cmd_writer.print("[{s}]", .{ref});
+        } else if (step.cmd) |cmd| {
+            const display = if (cmd.len > 40) cmd[0..40] else cmd;
+            try cmd_writer.writeAll(display);
+            if (cmd.len > 40) try cmd_writer.writeAll("...");
+        }
+    }
+
+    const owned_tags = try tags.toOwnedSlice(allocator);
+
+    const wf_data = workflow_mod.Workflow{
+        .name = try allocator.dupe(u8, name),
+        .desc = try allocator.dupe(u8, desc),
+        .tags = owned_tags,
+        .steps = owned_steps,
+        .params = owned_params,
+        .namespace = try allocator.dupe(u8, namespace),
+    };
+
+    // Save to file
+    try workflow_mod.saveWorkflow(allocator, &wf_data, cfg);
+
+    // Register in memory
+    try workflow_mod.registerWorkflow(allocator, wf_data);
+
+    // Add to store as a snippet entry
+    try snip_store.snippets.append(allocator, .{
+        .name = try allocator.dupe(u8, name),
+        .desc = try allocator.dupe(u8, desc),
+        .cmd = try cmd_buf.toOwnedSlice(allocator),
+        .tags = wf_data.tags,
+        .params = wf_data.params,
+        .namespace = try allocator.dupe(u8, namespace),
+        .kind = .workflow,
+    });
+
+    // Update filter and go back
+    allocator.free(state.filtered_indices);
+    state.filtered_indices = utils.updateFilter(allocator, snip_store, state.searchQuery()) catch &.{};
+    state.message = "✓ Workflow created";
+    state.mode = .normal;
+}
+
 pub fn openExternalEditor(allocator: std.mem.Allocator, snip: *const store.Snippet, cfg: config.Config) void {
     const dir = if (snip.kind == .workflow)
         cfg.getWorkflowsDir(allocator) catch return

@@ -5,6 +5,7 @@ const vaxis = @import("vaxis");
 const store = @import("../store.zig");
 const config = @import("../config.zig");
 const workspace_mod = @import("../workspace.zig");
+const pack_mod = @import("../pack.zig");
 
 const t = @import("types.zig");
 const render = @import("render.zig");
@@ -43,6 +44,16 @@ pub fn run(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.C
     state.filtered_indices = try utils.updateFilter(allocator, snip_store, state.searchQuery());
     defer allocator.free(state.filtered_indices);
 
+    // Defer cleanup for pack/workspace state
+    defer {
+        if (state.pack_preview_items.len > 0)
+            pack_mod.freePackPreview(allocator, state.pack_preview_items);
+        if (state.pack_list.len > 0)
+            pack_mod.freePackMetas(allocator, state.pack_list);
+        if (state.ws_loaded)
+            workspace_mod.freeWorkspaces(allocator, state.ws_list);
+    }
+
     while (state.running) {
         const event = loop.nextEvent();
         switch (event) {
@@ -64,6 +75,7 @@ pub fn run(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.C
             },
             .pack_browser => render.renderPackBrowser(win, &state, cfg),
             .pack_preview => render.renderPackPreview(win, &state, cfg),
+            .workflow_form => render.renderWorkflowForm(win, &state, snip_store, cfg),
             else => {
                 render.renderMainScreen(win, &state, snip_store, cfg);
             },

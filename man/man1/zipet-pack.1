@@ -1,0 +1,102 @@
+.\" zipet-pack(1) — pack management
+.
+.TH ZIPET\-PACK 1 "2024-03-18" "zipet 0.1.0" "User Commands"
+.
+.SH NAME
+zipet\-pack \- browse, install, create, and manage snippet packs
+.
+.SH SYNOPSIS
+.B zipet pack
+.I subcommand
+.RI [ arguments ]
+.
+.SH DESCRIPTION
+Packs are shareable collections of snippets and workflows distributed as
+TOML files. They can be installed from the built-in registry, a local file
+path, or a remote URL.
+.
+.SH SUBCOMMANDS
+.TP
+.B ls\fR, \fBlist
+List all available packs from the registry. Installed packs are marked
+with a checkmark.
+.TP
+.BI "install " "name|file|url" " [--workspace=WS]"
+Install a pack. The
+.I source
+can be:
+.RS
+.IP \(bu 2
+A built-in pack name (e.g.,
+.BR pentesting ", " devops ).
+.IP \(bu 2
+A local TOML file path (e.g.,
+.IR ./my\-snippets.toml ).
+.IP \(bu 2
+A remote URL (e.g.,
+.IR https://example.com/pack.toml ).
+.RE
+.IP
+Use
+.BI \-\-workspace= WS
+to install the pack into a specific workspace instead of globally.
+.TP
+.BI "uninstall " "name"
+.TQ
+.BI "rm " "name"
+Remove an installed pack and all its snippets from the store.
+.TP
+.BI "create " "name" " [--namespace=NS]"
+Create a new pack TOML file from existing snippets. If
+.BI \-\-namespace= NS
+is given, only snippets in that namespace are included.
+.TP
+.BI "info " "name"
+Display metadata about a pack: author, category, description,
+snippet count, and workflow count.
+.
+.SH BUILT-IN PACKS
+.TS
+tab(;);
+lb lb
+l l.
+Pack;Description
+_
+pentesting;Nmap, gobuster, sqlmap, hydra, hashcat...
+devops;Docker, Kubernetes, deployment, monitoring
+git\-power;Advanced Git workflows and shortcuts
+sysadmin;Linux system administration essentials
+web\-dev;HTTP testing, API debugging, JWT, encoding
+.TE
+.
+.SH EXAMPLES
+.nf
+# Browse available packs
+zipet pack ls
+
+# Install a built-in pack
+zipet pack install pentesting
+
+# Install into a workspace
+zipet pack install devops \-\-workspace=myproject
+
+# Install from a URL
+zipet pack install https://example.com/team\-pack.toml
+
+# Create a pack from your snippets
+zipet pack create my\-tools \-\-namespace=general
+
+# View details
+zipet pack info pentesting
+
+# Remove
+zipet pack uninstall devops
+.fi
+.
+.SH SEE ALSO
+.BR zipet (1),
+.BR zipet\-workspace (1),
+.BR zipet\-snippets (5)
+.
+.SH AUTHORS
+Luis Garcia

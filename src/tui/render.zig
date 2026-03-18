@@ -25,6 +25,7 @@ const help_lines = [_]HelpLine{
     .{ .text = "  e             Edit snippet", .is_header = false, .is_spacer = false },
     .{ .text = "  d             Delete (confirm)", .is_header = false, .is_spacer = false },
     .{ .text = "  a             Add new snippet", .is_header = false, .is_spacer = false },
+    .{ .text = "  w             Create workflow", .is_header = false, .is_spacer = false },
     .{ .text = "  y             Yank to clipboard", .is_header = false, .is_spacer = false },
     .{ .text = "  p             Paste from clipboard", .is_header = false, .is_spacer = false },
     .{ .text = "  o             Open TOML file", .is_header = false, .is_spacer = false },
@@ -156,7 +157,7 @@ pub fn renderMainScreen(win: Window, state: *State, snip_store: *store.Store, cf
         } else if (state.selectionCount() > 0) {
             _ = mw.print(&.{.{ .text = " x toggle  X clear  R run parallel  D delete  Enter run cursor", .style = .{ .fg = .{ .index = 3 } } }}, .{ .row_offset = by });
         } else {
-            _ = mw.print(&.{.{ .text = " j/k move  Enter run  x select  a add  e edit  d del  y yank  P packs  ? help", .style = t.dim_style }}, .{ .row_offset = by });
+            _ = mw.print(&.{.{ .text = " j/k move  Enter run  x select  a add  w workflow  e edit  d del  P packs  ? help", .style = t.dim_style }}, .{ .row_offset = by });
         }
     }
 
@@ -1014,6 +1015,238 @@ pub fn renderPackPreview(win: Window, state: *State, cfg: config.Config) void {
     }
 }
 
+// ── Workflow form rendering ──
+pub fn renderWorkflowForm(win: Window, state: *State, snip_store: *store.Store, cfg: config.Config) void {
+    const ab = t.accentBoldStyle(cfg.accent_color);
+    const as = t.accentStyle(cfg.accent_color);
+    const wf = &state.wf_form;
+
+    switch (wf.phase) {
+        .info => {
+            _ = win.print(&.{.{ .text = "── Create Workflow ──", .style = ab }}, .{ .row_offset = 2, .col_offset = 2 });
+
+            const field_x: u16 = 18;
+            var row: u16 = 4;
+            var fi: usize = 0;
+            while (fi < 4) : (fi += 1) {
+                const label = wf.info_labels[fi];
+                const field = &wf.info_fields[fi];
+                const is_active = fi == wf.info_active;
+                const label_style = if (is_active) ab else t.dim_style;
+
+                _ = win.print(&.{.{ .text = label, .style = label_style }}, .{ .row_offset = row, .col_offset = 2 });
+                _ = win.print(&.{.{ .text = ":", .style = label_style }}, .{ .row_offset = row, .col_offset = @intCast(@min(2 + label.len, win.width -| 1)) });
+
+                const content = field.text();
+                const field_w = win.width -| field_x -| 2;
+                const display_len = @min(content.len, field_w);
+
+                if (is_active) {
+                    var c: u16 = field_x;
+                    while (c < field_x + field_w) : (c += 1) {
+                        win.writeCell(c, row, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = .{ .index = 236 } } });
+                    }
+                    _ = win.print(&.{.{ .text = content[0..display_len], .style = .{ .bg = .{ .index = 236 } } }}, .{ .row_offset = row, .col_offset = field_x });
+                } else {
+                    if (content.len > 0) {
+                        _ = win.print(&.{.{ .text = content[0..display_len], .style = .{} }}, .{ .row_offset = row, .col_offset = field_x });
+                    } else {
+                        _ = win.print(&.{.{ .text = "—", .style = t.dim_style }}, .{ .row_offset = row, .col_offset = field_x });
+                    }
+                }
+                row += 2;
+            }
+
+            if (wf.error_msg) |emsg| {
+                _ = win.print(&.{.{ .text = emsg, .style = t.err_style }}, .{ .row_offset = row, .col_offset = 2 });
+                row += 1;
+            }
+
+            row += 1;
+            _ = win.print(&.{.{ .text = "  Tab/↓: next   ↑: prev   Enter: add steps   Ctrl+S: next   Esc: cancel", .style = t.dim_style }}, .{ .row_offset = row });
+        },
+        .steps => {
+            // Title
+            var title_buf: [128]u8 = undefined;
+            const wf_name = wf.info_fields[t.WorkflowFormState.F_NAME].text();
+            const title = std.fmt.bufPrint(&title_buf, "── Workflow: {s} — Steps ──", .{wf_name}) catch "── Workflow Steps ──";
+            _ = win.print(&.{.{ .text = title, .style = ab }}, .{ .row_offset = 1, .col_offset = 2 });
+
+            // Step list
+            var row: u16 = 3;
+            if (wf.step_count == 0) {
+                _ = win.print(&.{.{ .text = "  No steps yet. Add one below.", .style = t.dim_style }}, .{ .row_offset = row });
+                row += 1;
+            } else {
+                const max_visible: usize = @intCast(@min(@as(u16, @intCast(wf.step_count)), win.height / 3));
+                for (0..max_visible) |i| {
+                    if (row + 1 >= win.height -| 10) break;
+                    const se = &wf.steps[i];
+                    const selected = !wf.editing_new_step and i == wf.step_cursor;
+
+                    var num_buf: [8]u8 = undefined;
+                    const num_str = std.fmt.bufPrint(&num_buf, " {d}.", .{i + 1}) catch "?";
+
+                    if (selected) {
+                        _ = win.print(&.{
+                            .{ .text = " ▸", .style = ab },
+                            .{ .text = num_str, .style = ab },
+                        }, .{ .row_offset = row });
+                    } else {
+                        _ = win.print(&.{
+                            .{ .text = "  ", .style = .{} },
+                            .{ .text = num_str, .style = t.dim_style },
+                        }, .{ .row_offset = row });
+                    }
+
+                    const name_col: u16 = 7;
+                    const name_style = if (selected) ab else t.bold_style;
+                    _ = win.print(&.{.{ .text = se.nameSlice(), .style = name_style }}, .{ .row_offset = row, .col_offset = name_col });
+
+                    // Show type indicator
+                    const type_col: u16 = 28;
+                    if (se.is_snippet) {
+                        _ = win.print(&.{.{ .text = "→ ", .style = t.wf_style }}, .{ .row_offset = row, .col_offset = type_col });
+                    } else {
+                        _ = win.print(&.{.{ .text = "$ ", .style = as }}, .{ .row_offset = row, .col_offset = type_col });
+                    }
+                    const cmd_col: u16 = type_col + 2;
+                    const max_cmd = @min(se.cmdSlice().len, @as(usize, win.width -| cmd_col -| 1));
+                    _ = win.print(&.{.{ .text = se.cmdSlice()[0..max_cmd], .style = if (selected) .{} else t.dim_style }}, .{ .row_offset = row, .col_offset = cmd_col });
+
+                    row += 1;
+
+                    // on_fail indicator
+                    _ = win.print(&.{
+                        .{ .text = "       on_fail: ", .style = t.dim_style },
+                        .{ .text = se.on_fail.label(), .style = t.dim_style },
+                    }, .{ .row_offset = row });
+                    row += 1;
+                }
+            }
+
+            // Separator
+            row += 1;
+            hline(win, row, win.width);
+            row += 1;
+
+            // New step form
+            const form_active = wf.editing_new_step;
+            _ = win.print(&.{.{ .text = "  ╭─ New Step ─", .style = if (form_active) as else t.dim_style }}, .{ .row_offset = row });
+            row += 1;
+
+            // Field 0: Step name
+            {
+                const is_active = form_active and wf.new_step_field == 0;
+                const label_style = if (is_active) ab else t.dim_style;
+                _ = win.print(&.{.{ .text = "  │ Name:", .style = label_style }}, .{ .row_offset = row });
+                const fx: u16 = 14;
+                const content = wf.new_step.name[0..wf.new_step.name_len];
+                const fw = win.width -| fx -| 2;
+                const dl = @min(content.len, fw);
+                if (is_active) {
+                    var c: u16 = fx;
+                    while (c < fx + fw) : (c += 1) {
+                        win.writeCell(c, row, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = .{ .index = 236 } } });
+                    }
+                    _ = win.print(&.{.{ .text = content[0..dl], .style = .{ .bg = .{ .index = 236 } } }}, .{ .row_offset = row, .col_offset = fx });
+                } else if (content.len > 0) {
+                    _ = win.print(&.{.{ .text = content[0..dl], .style = .{} }}, .{ .row_offset = row, .col_offset = fx });
+                }
+                row += 1;
+            }
+
+            // Field 1: Type toggle
+            {
+                const is_active = form_active and wf.new_step_field == 1;
+                const label_style = if (is_active) ab else t.dim_style;
+                _ = win.print(&.{.{ .text = "  │ Type:", .style = label_style }}, .{ .row_offset = row });
+                const type_label: []const u8 = if (wf.new_step.is_snippet) "snippet (Enter/Space to toggle)" else "command (Enter/Space to toggle)";
+                const type_style = if (is_active) ab else t.dim_style;
+                _ = win.print(&.{.{ .text = type_label, .style = type_style }}, .{ .row_offset = row, .col_offset = 14 });
+                row += 1;
+            }
+
+            // Field 2: Command/Snippet ref
+            {
+                const is_active = form_active and wf.new_step_field == 2;
+                const field_label: []const u8 = if (wf.new_step.is_snippet) "  │ Snippet:" else "  │ Command:";
+                const label_style = if (is_active) ab else t.dim_style;
+                _ = win.print(&.{.{ .text = field_label, .style = label_style }}, .{ .row_offset = row });
+                const fx: u16 = 16;
+                const content = wf.new_step.cmd[0..wf.new_step.cmd_len];
+                const fw = win.width -| fx -| 2;
+                const dl = @min(content.len, fw);
+                if (is_active) {
+                    var c: u16 = fx;
+                    while (c < fx + fw) : (c += 1) {
+                        win.writeCell(c, row, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = .{ .index = 236 } } });
+                    }
+                    _ = win.print(&.{.{ .text = content[0..dl], .style = .{ .bg = .{ .index = 236 } } }}, .{ .row_offset = row, .col_offset = fx });
+                } else if (content.len > 0) {
+                    _ = win.print(&.{.{ .text = content[0..dl], .style = .{} }}, .{ .row_offset = row, .col_offset = fx });
+                }
+
+                // Show available snippets hint when in snippet mode
+                if (wf.new_step.is_snippet and is_active) {
+                    row += 1;
+                    _ = win.print(&.{.{ .text = "  │  Snippets: ", .style = t.dim_style }}, .{ .row_offset = row });
+                    var sc: u16 = 17;
+                    var shown: usize = 0;
+                    for (snip_store.snippets.items) |snip| {
+                        if (snip.kind == .snippet) {
+                            if (shown > 0) {
+                                if (sc + 2 >= win.width) break;
+                                _ = win.print(&.{.{ .text = ", ", .style = t.dim_style }}, .{ .row_offset = row, .col_offset = sc });
+                                sc += 2;
+                            }
+                            if (sc + @as(u16, @intCast(snip.name.len)) >= win.width -| 1) break;
+                            _ = win.print(&.{.{ .text = snip.name, .style = t.dim_style }}, .{ .row_offset = row, .col_offset = sc });
+                            sc += @intCast(snip.name.len);
+                            shown += 1;
+                            if (shown >= 8) break;
+                        }
+                    }
+                }
+                row += 1;
+            }
+
+            // Field 3: on_fail toggle
+            {
+                const is_active = form_active and wf.new_step_field == 3;
+                const label_style = if (is_active) ab else t.dim_style;
+                _ = win.print(&.{.{ .text = "  │ On fail:", .style = label_style }}, .{ .row_offset = row });
+                const fail_label = wf.new_step.on_fail.label();
+                const fail_style = if (is_active) ab else t.dim_style;
+                _ = win.print(&.{.{ .text = fail_label, .style = fail_style }}, .{ .row_offset = row, .col_offset = 16 });
+                if (is_active) {
+                    _ = win.print(&.{.{ .text = " (Enter/Space to cycle)", .style = t.dim_style }}, .{ .row_offset = row, .col_offset = 16 + @as(u16, @intCast(fail_label.len)) });
+                }
+                row += 1;
+            }
+
+            _ = win.print(&.{.{ .text = "  ╰──────────────", .style = if (form_active) as else t.dim_style }}, .{ .row_offset = row });
+            row += 1;
+
+            if (wf.error_msg) |emsg| {
+                row += 1;
+                _ = win.print(&.{.{ .text = emsg, .style = t.err_style }}, .{ .row_offset = row, .col_offset = 2 });
+            }
+
+            // Bottom bar
+            var steps_buf: [16]u8 = undefined;
+            const steps_str = std.fmt.bufPrint(&steps_buf, " {d} step(s)", .{wf.step_count}) catch "";
+            _ = win.print(&.{.{ .text = steps_str, .style = t.dim_style }}, .{ .row_offset = win.height -| 2, .col_offset = 2 });
+
+            if (wf.editing_new_step) {
+                _ = win.print(&.{.{ .text = "  Tab: next field  Enter: add step  Ctrl+S: save workflow  Ctrl+L: browse steps  Esc: back", .style = t.dim_style }}, .{ .row_offset = win.height -| 1 });
+            } else {
+                _ = win.print(&.{.{ .text = "  j/k: move  d: delete step  Tab/i: edit new step  Ctrl+S: save workflow  Esc: back", .style = t.dim_style }}, .{ .row_offset = win.height -| 1 });
+            }
+        },
+    }
+}
+
 // ── Cursor positioning ──
 pub fn setCursor(win: Window, state: *State) void {
     switch (state.mode) {
@@ -1038,6 +1271,40 @@ pub fn setCursor(win: Window, state: *State) void {
             const cursor_col: u16 = field_x + @as(u16, @intCast(@min(p.activeField().cursor, win.width -| field_x -| 1)));
             const cursor_row: u16 = 6 + @as(u16, @intCast(p.active)) * 2;
             win.showCursor(cursor_col, cursor_row);
+        },
+        .workflow_form => {
+            const wf = &state.wf_form;
+            switch (wf.phase) {
+                .info => {
+                    const field_x: u16 = 18;
+                    const cursor_col: u16 = field_x + @as(u16, @intCast(@min(wf.activeInfoField().cursor, win.width -| field_x -| 1)));
+                    const cursor_row: u16 = 4 + @as(u16, @intCast(wf.info_active)) * 2;
+                    win.showCursor(cursor_col, cursor_row);
+                },
+                .steps => {
+                    if (wf.editing_new_step) {
+                        // Calculate base row for new step form
+                        const step_lines: u16 = @intCast(@min(wf.step_count * 2, win.height / 3));
+                        const form_base: u16 = 3 + step_lines + 2; // list + separator + "New Step" header
+
+                        if (wf.new_step_field == 0) {
+                            // Name field
+                            const fx: u16 = 14;
+                            const cursor_col: u16 = fx + @as(u16, @intCast(@min(wf.new_step.name_len, win.width -| fx -| 1)));
+                            win.showCursor(cursor_col, form_base + 1);
+                        } else if (wf.new_step_field == 2) {
+                            // Cmd field
+                            const fx: u16 = 16;
+                            const cursor_col: u16 = fx + @as(u16, @intCast(@min(wf.new_step.cmd_len, win.width -| fx -| 1)));
+                            win.showCursor(cursor_col, form_base + 3);
+                        } else {
+                            win.hideCursor();
+                        }
+                    } else {
+                        win.hideCursor();
+                    }
+                },
+            }
         },
         else => win.hideCursor(),
     }

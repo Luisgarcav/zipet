@@ -7,6 +7,7 @@ pub const Config = struct {
     editor: []const u8,
     shell: []const u8,
     preview_enabled: bool,
+    active_workspace: ?[]const u8 = null, // set at runtime after workspace detection
 
     pub fn default() Config {
         return .{
@@ -15,6 +16,7 @@ pub const Config = struct {
             .editor = "vi",
             .shell = "/bin/sh",
             .preview_enabled = true,
+            .active_workspace = null,
         };
     }
 
@@ -30,13 +32,39 @@ pub const Config = struct {
         return allocator.dupe(u8, self.config_dir);
     }
 
+    /// Returns the snippets directory. If a workspace is active, returns the workspace's snippets dir.
     pub fn getSnippetsDir(self: Config, allocator: std.mem.Allocator) ![]const u8 {
+        if (self.active_workspace) |ws| {
+            const base = try self.getConfigDir(allocator);
+            defer allocator.free(base);
+            return std.fmt.allocPrint(allocator, "{s}/workspaces/{s}/snippets", .{ base, ws });
+        }
         const base = try self.getConfigDir(allocator);
         defer allocator.free(base);
         return std.fmt.allocPrint(allocator, "{s}/snippets", .{base});
     }
 
+    /// Returns the workflows directory. If a workspace is active, returns the workspace's workflows dir.
     pub fn getWorkflowsDir(self: Config, allocator: std.mem.Allocator) ![]const u8 {
+        if (self.active_workspace) |ws| {
+            const base = try self.getConfigDir(allocator);
+            defer allocator.free(base);
+            return std.fmt.allocPrint(allocator, "{s}/workspaces/{s}/workflows", .{ base, ws });
+        }
+        const base = try self.getConfigDir(allocator);
+        defer allocator.free(base);
+        return std.fmt.allocPrint(allocator, "{s}/workflows", .{base});
+    }
+
+    /// Get global snippets dir (always the top-level one, regardless of workspace)
+    pub fn getGlobalSnippetsDir(self: Config, allocator: std.mem.Allocator) ![]const u8 {
+        const base = try self.getConfigDir(allocator);
+        defer allocator.free(base);
+        return std.fmt.allocPrint(allocator, "{s}/snippets", .{base});
+    }
+
+    /// Get global workflows dir (always the top-level one, regardless of workspace)
+    pub fn getGlobalWorkflowsDir(self: Config, allocator: std.mem.Allocator) ![]const u8 {
         const base = try self.getConfigDir(allocator);
         defer allocator.free(base);
         return std.fmt.allocPrint(allocator, "{s}/workflows", .{base});
