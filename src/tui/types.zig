@@ -1,9 +1,11 @@
 /// TUI types, state, and style definitions for zipet.
 const std = @import("std");
 const vaxis = @import("vaxis");
+pub const vxfw = vaxis.vxfw;
 const config = @import("../config.zig");
 const workspace_mod = @import("../workspace.zig");
 const pack_mod = @import("../pack.zig");
+const unicode = @import("unicode.zig");
 
 pub const Cell = vaxis.Cell;
 pub const Key = vaxis.Key;
@@ -35,6 +37,7 @@ pub const Mode = enum {
     output_view,
     workspace_picker,
     pack_browser,
+    pack_search,
     pack_preview,
     workflow_form,
 };
@@ -63,46 +66,63 @@ pub const TextField = struct {
         self.cursor = 0;
     }
 
+    /// Insert a single ASCII character at cursor position.
     pub fn insertChar(self: *TextField, c: u8) void {
-        if (self.len >= FIELD_CAP - 1) return;
-        if (self.cursor < self.len) {
-            var i = self.len;
-            while (i > self.cursor) : (i -= 1) {
-                self.buf[i] = self.buf[i - 1];
-            }
-        }
-        self.buf[self.cursor] = c;
-        self.len += 1;
-        self.cursor += 1;
+        self.insertSlice(&.{c});
     }
 
+    /// Insert a UTF-8 encoded slice at cursor position.
+    pub fn insertSlice(self: *TextField, bytes: []const u8) void {
+        if (bytes.len == 0) return;
+        if (self.len + bytes.len > FIELD_CAP - 1) return;
+        // Shift existing bytes to the right
+        if (self.cursor < self.len) {
+            var i = self.len + bytes.len - 1;
+            while (i >= self.cursor + bytes.len) : (i -= 1) {
+                self.buf[i] = self.buf[i - bytes.len];
+                if (i == 0) break;
+            }
+        }
+        // Copy new bytes in
+        @memcpy(self.buf[self.cursor .. self.cursor + bytes.len], bytes);
+        self.len += bytes.len;
+        self.cursor += bytes.len;
+    }
+
+    /// Delete the UTF-8 codepoint before the cursor.
     pub fn backspace(self: *TextField) void {
         if (self.cursor == 0) return;
-        if (self.cursor < self.len) {
-            var i = self.cursor - 1;
-            while (i + 1 < self.len) : (i += 1) {
-                self.buf[i] = self.buf[i + 1];
-            }
+        const prev = unicode.prevCodepointStart(self.buf[0..self.len], self.cursor);
+        const del_len = self.cursor - prev;
+        // Shift bytes left
+        var i = prev;
+        while (i + del_len < self.len) : (i += 1) {
+            self.buf[i] = self.buf[i + del_len];
         }
-        self.len -= 1;
-        self.cursor -= 1;
+        self.len -= del_len;
+        self.cursor = prev;
     }
 
+    /// Delete the UTF-8 codepoint at the cursor.
     pub fn deleteForward(self: *TextField) void {
         if (self.cursor >= self.len) return;
+        const next = unicode.nextCodepointEnd(self.buf[0..self.len], self.cursor);
+        const del_len = next - self.cursor;
         var i = self.cursor;
-        while (i + 1 < self.len) : (i += 1) {
-            self.buf[i] = self.buf[i + 1];
+        while (i + del_len < self.len) : (i += 1) {
+            self.buf[i] = self.buf[i + del_len];
         }
-        self.len -= 1;
+        self.len -= del_len;
     }
 
+    /// Move cursor one codepoint to the left.
     pub fn moveLeft(self: *TextField) void {
-        if (self.cursor > 0) self.cursor -= 1;
+        self.cursor = unicode.prevCodepointStart(self.buf[0..self.len], self.cursor);
     }
 
+    /// Move cursor one codepoint to the right.
     pub fn moveRight(self: *TextField) void {
-        if (self.cursor < self.len) self.cursor += 1;
+        self.cursor = unicode.nextCodepointEnd(self.buf[0..self.len], self.cursor);
     }
 
     pub fn moveHome(self: *TextField) void {
@@ -371,6 +391,11 @@ pub const State = struct {
     pack_list: []pack_mod.PackMeta = &.{},
     pack_cursor: usize = 0,
     pack_scroll: usize = 0,
+    pack_search_buf: [256]u8 = [_]u8{0} ** 256,
+    pack_search_len: usize = 0,
+    pack_search_active: bool = false,
+    pack_filtered_indices: []usize = &.{},
+    pack_community_loaded: bool = false,
 
     // Pack preview state
     pack_preview_items: []pack_mod.PackItemPreview = &.{},
@@ -419,6 +444,10 @@ pub const State = struct {
 
     pub fn searchQuery(self: *State) []const u8 {
         return self.search_buf[0..self.search_len];
+    }
+
+    pub fn packSearchQuery(self: *State) []const u8 {
+        return self.pack_search_buf[0..self.pack_search_len];
     }
 
     pub fn commandStr(self: *State) []const u8 {
