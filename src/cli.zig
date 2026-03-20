@@ -10,6 +10,8 @@ const pack = @import("pack.zig");
 const community = @import("community.zig");
 const workspace_mod = @import("workspace.zig");
 const update = @import("update.zig");
+const tui_types = @import("tui/types.zig");
+const tui = @import("tui.zig");
 
 /// Respects NO_COLOR (https://no-color.org/) and --no-color flag.
 var no_color: bool = false;
@@ -932,14 +934,21 @@ fn cmdWorkflow(allocator: std.mem.Allocator, args: []const []const u8, snip_stor
             return;
         }
         var dry_run = false;
+        var tui_mode = false;
         const remaining_args = args[2..];
         for (remaining_args) |arg| {
             if (std.mem.eql(u8, arg, "--dry")) {
                 dry_run = true;
-                break;
+            }
+            if (std.mem.eql(u8, arg, "--tui")) {
+                tui_mode = true;
             }
         }
-        try cmdWorkflowRun(allocator, args[1], snip_store, cfg, dry_run);
+        if (tui_mode) {
+            try cmdWorkflowRunTui(allocator, args[1], snip_store, cfg);
+        } else {
+            try cmdWorkflowRun(allocator, args[1], snip_store, cfg, dry_run);
+        }
     } else if (std.mem.eql(u8, sub, "ls")) {
         cmdWorkflowList(allocator, snip_store);
     } else if (std.mem.eql(u8, sub, "show")) {
@@ -1223,6 +1232,114 @@ fn cmdWorkflowRun(allocator: std.mem.Allocator, name: []const u8, snip_store: *s
         defer result.deinit();
     } else {
         printOut(allocator, "Workflow '{s}' not found\n", .{name});
+    }
+}
+
+fn cmdWorkflowRunTui(allocator: std.mem.Allocator, name: []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+    const wf = workflow.getWorkflow(allocator, name) orelse {
+        printOut(allocator, "Workflow '{s}' not found\n", .{name});
+        return;
+    };
+
+    // Prompt for workflow params interactively (same as execute())
+    var param_keys = try allocator.alloc([]const u8, wf.params.len);
+    defer allocator.free(param_keys);
+    var param_values = try allocator.alloc([]const u8, wf.params.len);
+    defer {
+        for (param_values[0..wf.params.len]) |v| allocator.free(v);
+        allocator.free(param_values);
+    }
+
+    for (wf.params, 0..) |p, i| {
+        param_keys[i] = p.name;
+
+        const prompt_text = p.prompt orelse p.name;
+        if (p.default) |d| {
+            printOut(allocator, "{s} [{s}]: ", .{ prompt_text, d });
+        } else {
+            printOut(allocator, "{s}: ", .{prompt_text});
+        }
+
+        var buf: [1024]u8 = undefined;
+        const input = readLine(&buf);
+        if (input) |inp| {
+            if (inp.len == 0 and p.default != null) {
+                param_values[i] = try allocator.dupe(u8, p.default.?);
+            } else {
+                param_values[i] = try allocator.dupe(u8, inp);
+            }
+        } else {
+            param_values[i] = try allocator.dupe(u8, p.default orelse "");
+        }
+    }
+
+    // Set up TUI state for workflow runner mode
+    var state = tui_types.State{};
+    state.output = tui_types.OutputBuf.init(allocator);
+    defer state.output.deinit();
+    defer if (state.output_title) |tt| allocator.free(tt);
+    state.initSelectedSet(allocator);
+    defer state.deinitSelectedSet();
+
+    // Configure workflow runner state
+    state.mode = .workflow_runner;
+    state.wf_runner.workflow_name = wf.name;
+    state.wf_runner.total_steps = wf.steps.len;
+    state.wf_runner.is_running = true;
+
+    // Spawn engine thread
+    const engine_thread = try std.Thread.spawn(.{}, struct {
+        fn run(
+            alloc: std.mem.Allocator,
+            w: *const workflow.Workflow,
+            ss: *store.Store,
+            pk: []const []const u8,
+            pv: []const []const u8,
+            events: *std.ArrayListUnmanaged(tui_types.WorkflowEvent),
+            mutex: *std.Thread.Mutex,
+            resp: *?u8,
+            runner_state: *tui_types.WorkflowRunnerState,
+        ) void {
+            const result = workflow.executeWithEvents(alloc, w, ss, pk, pv, events, mutex, resp);
+            _ = result;
+            runner_state.is_running = false;
+        }
+    }.run, .{
+        allocator,
+        wf,
+        snip_store,
+        param_keys,
+        param_values,
+        &state.wf_runner.events,
+        &state.wf_runner.mutex,
+        &state.wf_runner.user_response,
+        &state.wf_runner,
+    });
+    state.wf_runner.engine_thread = engine_thread;
+
+    // Set up filtered indices (needed for TUI init even though we're in runner mode)
+    state.filtered_indices = &.{};
+
+    // Defer cleanup for pack/workspace state
+    defer {
+        if (state.pack_preview_items.len > 0)
+            @import("pack.zig").freePackPreview(allocator, state.pack_preview_items);
+        if (state.pack_list.len > 0)
+            @import("pack.zig").freePackMetas(allocator, state.pack_list);
+        if (state.pack_filtered_indices.len > 0)
+            allocator.free(state.pack_filtered_indices);
+        if (state.ws_loaded)
+            workspace_mod.freeWorkspaces(allocator, state.ws_list);
+    }
+
+    // Launch the TUI (using the tui/root.zig run function structure, but with pre-configured state)
+    // We need to create the app directly here since the state is already set up
+    const root_mod = @import("tui/root.zig");
+    try root_mod.runWithState(allocator, snip_store, cfg, &state);
+
+    // Wait for engine thread to finish after TUI exits
+    if (state.wf_runner.engine_thread) |t| {
+        t.join();
     }
 }
 

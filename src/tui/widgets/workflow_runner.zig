@@ -71,7 +71,7 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
     }
 }
 
-/// Build step display info by processing workflow events.
+/// Build step display info by processing workflow events (thread-safe).
 fn buildStepDisplays(self: *const WorkflowRunner, arena: std.mem.Allocator) std.mem.Allocator.Error![]StepDisplay {
     const runner = &self.state.wf_runner;
     const total = runner.total_steps;
@@ -87,6 +87,11 @@ fn buildStepDisplays(self: *const WorkflowRunner, arena: std.mem.Allocator) std.
             .exit_code = 0,
         };
     }
+
+    // Lock mutex to safely read events from the engine thread
+    const mutex = &@constCast(&self.state.wf_runner).mutex;
+    mutex.lock();
+    defer mutex.unlock();
 
     // Process events to update statuses
     for (runner.events.items) |ev| {
@@ -126,9 +131,13 @@ fn buildStepDisplays(self: *const WorkflowRunner, arena: std.mem.Allocator) std.
     return steps;
 }
 
-/// Collect output lines from events.
+/// Collect output lines from events (thread-safe).
 fn collectOutputLines(self: *const WorkflowRunner, arena: std.mem.Allocator) std.mem.Allocator.Error![]const OutputEntry {
     const runner = &self.state.wf_runner;
+    const mutex = &@constCast(&self.state.wf_runner).mutex;
+    mutex.lock();
+    defer mutex.unlock();
+
     var lines: std.ArrayListUnmanaged(OutputEntry) = .{};
     for (runner.events.items) |ev| {
         switch (ev) {
@@ -146,9 +155,13 @@ const OutputEntry = struct {
     is_stderr: bool,
 };
 
-/// Get prompt message if there's a pending confirm/ask.
+/// Get prompt message if there's a pending confirm/ask (thread-safe).
 fn getPromptMessage(self: *const WorkflowRunner) ?[]const u8 {
     const runner = &self.state.wf_runner;
+    const mutex = &@constCast(&self.state.wf_runner).mutex;
+    mutex.lock();
+    defer mutex.unlock();
+
     // Walk events backwards to find latest prompt
     var i = runner.events.items.len;
     while (i > 0) {

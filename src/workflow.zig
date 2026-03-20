@@ -382,6 +382,475 @@ pub fn executeSilent(
     };
 }
 
+// ── Event-driven execution for TUI runner ──
+
+const types = @import("tui/types.zig");
+
+fn emitEvent(
+    event_list: *std.ArrayListUnmanaged(types.WorkflowEvent),
+    mutex: *std.Thread.Mutex,
+    event: types.WorkflowEvent,
+) void {
+    mutex.lock();
+    defer mutex.unlock();
+    event_list.append(std.heap.page_allocator, event) catch {};
+}
+
+fn waitForResponse(response_ptr: *?u8) u8 {
+    while (true) {
+        if (response_ptr.*) |r| {
+            response_ptr.* = null;
+            return r;
+        }
+        std.Thread.sleep(50 * std.time.ns_per_ms);
+    }
+}
+
+/// Execute a workflow emitting WorkflowEvents instead of printing to stdout.
+/// Designed to run on a background thread; the TUI reads events via the mutex-protected list.
+pub fn executeWithEvents(
+    allocator: std.mem.Allocator,
+    wf: *const Workflow,
+    snip_store: *store.Store,
+    param_keys: []const []const u8,
+    param_values_in: []const []const u8,
+    event_list: *std.ArrayListUnmanaged(types.WorkflowEvent),
+    event_mutex: *std.Thread.Mutex,
+    response_ptr: *?u8,
+) WorkflowResult {
+    return executeWithEventsInner(
+        allocator, wf, snip_store, param_keys, param_values_in,
+        event_list, event_mutex, response_ptr,
+    ) catch {
+        emitEvent(event_list, event_mutex, .{ .workflow_done = .{ .success = false } });
+        return WorkflowResult{
+            .step_results = &.{},
+            .success = false,
+            .allocator = allocator,
+        };
+    };
+}
+
+fn executeWithEventsInner(
+    allocator: std.mem.Allocator,
+    wf: *const Workflow,
+    snip_store: *store.Store,
+    param_keys: []const []const u8,
+    param_values_in: []const []const u8,
+    event_list: *std.ArrayListUnmanaged(types.WorkflowEvent),
+    event_mutex: *std.Thread.Mutex,
+    response_ptr: *?u8,
+) !WorkflowResult {
+    var step_results: std.ArrayList(StepResult) = .{};
+    var prev_stdout: []const u8 = "";
+    var prev_exit: u8 = 0;
+    var all_success = true;
+    var prev_stdout_owned = false;
+
+    var var_ctx = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var vit = var_ctx.iterator();
+        while (vit.next()) |entry| {
+            allocator.free(entry.value_ptr.*);
+        }
+        var_ctx.deinit();
+    }
+
+    defer {
+        if (prev_stdout_owned) allocator.free(prev_stdout);
+    }
+
+    // Build DAG nodes
+    var dag_nodes = try allocator.alloc(dag.Node, wf.steps.len);
+    defer allocator.free(dag_nodes);
+    for (wf.steps, 0..) |step, i| {
+        dag_nodes[i] = .{
+            .name = step.name,
+            .index = i,
+            .depends_on = step.depends_on,
+        };
+    }
+
+    const exec_order = dag.topologicalSort(allocator, dag_nodes) catch |err| {
+        if (err == dag.GraphError.CycleDetected or err == dag.GraphError.UnknownDependency) {
+            emitEvent(event_list, event_mutex, .{ .workflow_done = .{ .success = false } });
+            return WorkflowResult{ .step_results = try step_results.toOwnedSlice(allocator), .success = false, .allocator = allocator };
+        } else {
+            return err;
+        }
+    };
+    defer allocator.free(exec_order);
+
+    var skipped_set = try allocator.alloc(bool, wf.steps.len);
+    defer allocator.free(skipped_set);
+    @memset(skipped_set, false);
+
+    for (exec_order) |step_idx| {
+        const step = wf.steps[step_idx];
+
+        // Skipped by dependency failure
+        if (skipped_set[step_idx]) {
+            emitEvent(event_list, event_mutex, .{ .step_skipped = .{
+                .name = step.name,
+                .index = step_idx,
+                .reason = "dependency failed",
+            } });
+            try step_results.append(allocator, .{
+                .step_name = step.name,
+                .exit_code = 0,
+                .stdout = try allocator.dupe(u8, ""),
+                .stderr = try allocator.dupe(u8, ""),
+                .skipped = true,
+            });
+            continue;
+        }
+
+        // Evaluate when clause
+        if (step.when) |when_expr| {
+            var when_vars = condition.VarContext.init(allocator);
+            defer when_vars.deinit();
+
+            for (0..param_keys.len) |pi| {
+                try when_vars.put(param_keys[pi], param_values_in[pi]);
+            }
+            const prev_exit_str = try std.fmt.allocPrint(allocator, "{d}", .{prev_exit});
+            defer allocator.free(prev_exit_str);
+            try when_vars.put("prev_stdout", prev_stdout);
+            try when_vars.put("prev_exit", prev_exit_str);
+            var ctx_iter = var_ctx.iterator();
+            while (ctx_iter.next()) |entry| {
+                try when_vars.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            const should_run = condition.evaluate(allocator, when_expr, &when_vars) catch false;
+            if (!should_run) {
+                emitEvent(event_list, event_mutex, .{ .step_skipped = .{
+                    .name = step.name,
+                    .index = step_idx,
+                    .reason = "when clause false",
+                } });
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 0,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, ""),
+                    .skipped = true,
+                });
+                continue;
+            }
+        }
+
+        // Resolve command
+        const raw_cmd = blk: {
+            if (step.cmd) |cmd| {
+                break :blk cmd;
+            } else if (step.snippet_ref) |ref| {
+                const snip = findSnippet(snip_store, ref);
+                if (snip) |s| {
+                    break :blk s.cmd;
+                } else {
+                    emitEvent(event_list, event_mutex, .{ .step_failed = .{
+                        .name = step.name,
+                        .index = step_idx,
+                        .exit_code = 1,
+                        .duration_ms = 0,
+                    } });
+                    emitEvent(event_list, event_mutex, .{ .output_line = .{ .text = "snippet not found", .is_stderr = true } });
+                    try step_results.append(allocator, .{
+                        .step_name = step.name,
+                        .exit_code = 1,
+                        .stdout = try allocator.dupe(u8, ""),
+                        .stderr = try allocator.dupe(u8, "snippet not found"),
+                        .skipped = true,
+                    });
+                    all_success = false;
+                    switch (step.on_fail) {
+                        .stop => {
+                            const dependents = try dag.dependentsOf(allocator, dag_nodes, step_idx);
+                            defer allocator.free(dependents);
+                            for (dependents) |dep_idx| skipped_set[dep_idx] = true;
+                            continue;
+                        },
+                        .skip_rest, .ask => break,
+                        .@"continue" => continue,
+                    }
+                }
+            } else {
+                emitEvent(event_list, event_mutex, .{ .step_skipped = .{
+                    .name = step.name,
+                    .index = step_idx,
+                    .reason = "no command",
+                } });
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 1,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, "no command"),
+                    .skipped = true,
+                });
+                continue;
+            }
+        };
+
+        // Build template keys/values
+        const extra_count: usize = 2;
+        const override_count = step.param_overrides.len;
+        const var_ctx_count = var_ctx.count();
+        const total_k = param_keys.len + extra_count + override_count + var_ctx_count;
+
+        var all_keys = try allocator.alloc([]const u8, total_k);
+        defer allocator.free(all_keys);
+        var all_vals = try allocator.alloc([]const u8, total_k);
+        defer {
+            allocator.free(all_vals[param_keys.len]);
+            allocator.free(all_vals[param_keys.len + 1]);
+            for (param_keys.len + extra_count..param_keys.len + extra_count + override_count) |oi| allocator.free(all_vals[oi]);
+            allocator.free(all_vals);
+        }
+
+        for (0..param_keys.len) |pi| {
+            all_keys[pi] = param_keys[pi];
+            all_vals[pi] = param_values_in[pi];
+        }
+
+        all_keys[param_keys.len] = "prev_stdout";
+        all_vals[param_keys.len] = try allocator.dupe(u8, prev_stdout);
+        all_keys[param_keys.len + 1] = "prev_exit";
+        all_vals[param_keys.len + 1] = try std.fmt.allocPrint(allocator, "{d}", .{prev_exit});
+
+        for (step.param_overrides, 0..) |ov, oi| {
+            all_keys[param_keys.len + extra_count + oi] = ov.key;
+            all_vals[param_keys.len + extra_count + oi] = try allocator.dupe(u8, ov.value);
+        }
+
+        var var_idx: usize = 0;
+        var ctx_iter = var_ctx.iterator();
+        while (ctx_iter.next()) |entry| {
+            all_keys[param_keys.len + extra_count + override_count + var_idx] = entry.key_ptr.*;
+            all_vals[param_keys.len + extra_count + override_count + var_idx] = entry.value_ptr.*;
+            var_idx += 1;
+        }
+
+        const rendered = try template.render(allocator, raw_cmd, all_keys, all_vals);
+        defer allocator.free(rendered);
+
+        // Handle confirm
+        if (step.confirm) {
+            emitEvent(event_list, event_mutex, .{ .confirm_requested = .{
+                .name = step.name,
+                .index = step_idx,
+            } });
+            const resp = waitForResponse(response_ptr);
+            if (resp != 'y' and resp != 'Y') {
+                emitEvent(event_list, event_mutex, .{ .step_skipped = .{
+                    .name = step.name,
+                    .index = step_idx,
+                    .reason = "declined by user",
+                } });
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 0,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, ""),
+                    .skipped = true,
+                });
+                continue;
+            }
+        }
+
+        // Emit step_started
+        emitEvent(event_list, event_mutex, .{ .step_started = .{
+            .name = step.name,
+            .index = step_idx,
+        } });
+
+        // Execute with retry
+        const timer_start = std.time.milliTimestamp();
+        var attempt: u8 = 0;
+        const max_attempts: u8 = step.retry + 1;
+        var result = try executor.run(allocator, rendered);
+
+        // Emit output from first attempt
+        emitOutputLines(event_list, event_mutex, result.stdout, false);
+        emitOutputLines(event_list, event_mutex, result.stderr, true);
+
+        while (result.exit_code != 0 and attempt + 1 < max_attempts) {
+            attempt += 1;
+            allocator.free(result.stdout);
+            allocator.free(result.stderr);
+
+            emitEvent(event_list, event_mutex, .{ .retry_started = .{
+                .name = step.name,
+                .index = step_idx,
+                .attempt = attempt,
+                .max_attempts = max_attempts,
+            } });
+
+            if (step.retry_delay > 0) {
+                std.Thread.sleep(@as(u64, step.retry_delay) * std.time.ns_per_s);
+            }
+            result = try executor.run(allocator, rendered);
+            emitOutputLines(event_list, event_mutex, result.stdout, false);
+            emitOutputLines(event_list, event_mutex, result.stderr, true);
+        }
+
+        const duration_ms: u64 = @intCast(@max(0, std.time.milliTimestamp() - timer_start));
+        const step_success = result.exit_code == 0;
+        if (!step_success) all_success = false;
+
+        // Update prev_stdout/prev_exit
+        if (prev_stdout_owned) allocator.free(prev_stdout);
+        prev_stdout = try allocator.dupe(u8, std.mem.trim(u8, result.stdout, "\n\r"));
+        prev_stdout_owned = true;
+        prev_exit = result.exit_code;
+
+        // Handle capture
+        if (step.capture) |cap_name| {
+            if (result.exit_code == 0) {
+                const trimmed = std.mem.trim(u8, result.stdout, "\n\r \t");
+                const owned = try allocator.dupe(u8, trimmed);
+                if (var_ctx.fetchRemove(cap_name)) |old| {
+                    allocator.free(old.value);
+                }
+                try var_ctx.put(cap_name, owned);
+            }
+        }
+
+        // Handle on_fail=ask
+        if (!step_success and step.on_fail == .ask) {
+            emitEvent(event_list, event_mutex, .{ .ask_requested = .{
+                .name = step.name,
+                .index = step_idx,
+                .exit_code = result.exit_code,
+            } });
+
+            var should_abort = false;
+            ask_loop: while (true) {
+                const resp = waitForResponse(response_ptr);
+                switch (resp) {
+                    'r', 'R' => {
+                        allocator.free(result.stdout);
+                        allocator.free(result.stderr);
+                        result = try executor.run(allocator, rendered);
+                        emitOutputLines(event_list, event_mutex, result.stdout, false);
+                        emitOutputLines(event_list, event_mutex, result.stderr, true);
+                        if (result.exit_code == 0) {
+                            // Update prev after successful retry
+                            if (prev_stdout_owned) allocator.free(prev_stdout);
+                            prev_stdout = try allocator.dupe(u8, std.mem.trim(u8, result.stdout, "\n\r"));
+                            prev_stdout_owned = true;
+                            prev_exit = result.exit_code;
+                            all_success = true; // recovered
+                            break :ask_loop;
+                        }
+                        // Still failed, emit ask again
+                        emitEvent(event_list, event_mutex, .{ .ask_requested = .{
+                            .name = step.name,
+                            .index = step_idx,
+                            .exit_code = result.exit_code,
+                        } });
+                        continue; // ask again
+                    },
+                    's', 'S' => {
+                        break :ask_loop;
+                    },
+                    'a', 'A' => {
+                        should_abort = true;
+                        break :ask_loop;
+                    },
+                    else => continue,
+                }
+            }
+
+            try step_results.append(allocator, .{
+                .step_name = step.name,
+                .exit_code = result.exit_code,
+                .stdout = result.stdout,
+                .stderr = result.stderr,
+                .skipped = false,
+            });
+
+            if (result.exit_code == 0) {
+                emitEvent(event_list, event_mutex, .{ .step_completed = .{
+                    .name = step.name,
+                    .index = step_idx,
+                    .exit_code = 0,
+                    .duration_ms = duration_ms,
+                } });
+            } else {
+                emitEvent(event_list, event_mutex, .{ .step_failed = .{
+                    .name = step.name,
+                    .index = step_idx,
+                    .exit_code = result.exit_code,
+                    .duration_ms = duration_ms,
+                } });
+            }
+
+            if (should_abort) break;
+            continue;
+        }
+
+        // Append step result
+        try step_results.append(allocator, .{
+            .step_name = step.name,
+            .exit_code = result.exit_code,
+            .stdout = result.stdout,
+            .stderr = result.stderr,
+            .skipped = false,
+        });
+
+        if (step_success) {
+            emitEvent(event_list, event_mutex, .{ .step_completed = .{
+                .name = step.name,
+                .index = step_idx,
+                .exit_code = 0,
+                .duration_ms = duration_ms,
+            } });
+        } else {
+            emitEvent(event_list, event_mutex, .{ .step_failed = .{
+                .name = step.name,
+                .index = step_idx,
+                .exit_code = result.exit_code,
+                .duration_ms = duration_ms,
+            } });
+
+            switch (step.on_fail) {
+                .stop => {
+                    const dependents = try dag.dependentsOf(allocator, dag_nodes, step_idx);
+                    defer allocator.free(dependents);
+                    for (dependents) |dep_idx| skipped_set[dep_idx] = true;
+                },
+                .skip_rest => break,
+                .ask => unreachable, // handled above
+                .@"continue" => {},
+            }
+        }
+    }
+
+    emitEvent(event_list, event_mutex, .{ .workflow_done = .{ .success = all_success } });
+
+    return WorkflowResult{
+        .step_results = try step_results.toOwnedSlice(allocator),
+        .success = all_success,
+        .allocator = allocator,
+    };
+}
+
+fn emitOutputLines(
+    event_list: *std.ArrayListUnmanaged(types.WorkflowEvent),
+    mutex: *std.Thread.Mutex,
+    output: []const u8,
+    is_stderr: bool,
+) void {
+    if (output.len == 0) return;
+    var iter = std.mem.splitScalar(u8, output, '\n');
+    while (iter.next()) |line| {
+        if (line.len > 0 or iter.peek() != null) {
+            emitEvent(event_list, mutex, .{ .output_line = .{ .text = line, .is_stderr = is_stderr } });
+        }
+    }
+}
+
 /// Execute a complete workflow, prompting for params and running each step in order.
 pub fn execute(
     allocator: std.mem.Allocator,

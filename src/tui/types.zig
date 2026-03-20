@@ -412,8 +412,10 @@ pub const WorkflowRunnerState = struct {
     workflow_name: []const u8 = "",
     total_steps: usize = 0,
     events: std.ArrayListUnmanaged(WorkflowEvent) = .{},
+    mutex: std.Thread.Mutex = .{},
     user_response: ?u8 = null,
     is_running: bool = false,
+    engine_thread: ?std.Thread = null,
 
     pub fn deinit(self: *WorkflowRunnerState, alloc: std.mem.Allocator) void {
         self.events.deinit(alloc);

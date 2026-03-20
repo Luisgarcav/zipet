@@ -313,6 +313,44 @@ const ZipetRoot = struct {
     }
 };
 
+/// Run the TUI with a pre-configured State (used by CLI --tui for workflow runner mode).
+pub fn runWithState(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.Config, state: *t.State) !void {
+    // Create a dummy history for TUI (workflow runner mode doesn't need it)
+    var hist = history_mod.History.init(allocator, cfg);
+    defer hist.deinit();
+
+    var root = ZipetRoot{
+        .state = state,
+        .store = snip_store,
+        .cfg = cfg,
+        .hist = &hist,
+        .allocator = allocator,
+        .output_view = .{ .state = state, .cfg = cfg },
+        .help_screen = .{ .state = state, .cfg = cfg },
+        .form_screen = .{ .state = state, .snip_store = snip_store, .hist = &hist, .cfg = cfg, .allocator = allocator, .fields = undefined },
+        .param_input = .{ .state = state, .snip_store = snip_store, .hist = &hist, .cfg = cfg, .allocator = allocator, .fields = undefined },
+        .workflow_form = .{ .state = state, .snip_store = snip_store, .cfg = cfg, .allocator = allocator, .info_fields = undefined, .step_name_field = undefined, .step_cmd_field = undefined },
+        .pack_browser = .{ .state = state, .snip_store = snip_store, .cfg = cfg, .allocator = allocator },
+        .pack_preview = .{ .state = state, .snip_store = snip_store, .cfg = cfg, .allocator = allocator },
+        .tag_picker = .{ .state = state, .snip_store = snip_store, .hist = &hist, .cfg = cfg, .allocator = allocator },
+        .workspace_picker = .{ .state = state, .snip_store = snip_store, .hist = &hist, .cfg = cfg, .allocator = allocator },
+        .main_screen = .{ .state = state, .snip_store = snip_store, .cfg = cfg, .hist = &hist, .allocator = allocator, .search_field = vxfw.TextField.init(allocator), .command_field = vxfw.TextField.init(allocator) },
+        .workflow_runner = .{ .state = state, .cfg = cfg },
+    };
+    root.form_screen.initFields();
+    defer root.form_screen.deinitFields();
+    root.param_input.initFields();
+    defer root.param_input.deinitFields();
+    root.workflow_form.initFields();
+    defer root.workflow_form.deinitFields();
+    defer root.main_screen.search_field.deinit();
+    defer root.main_screen.command_field.deinit();
+
+    var app = try vxfw.App.init(allocator);
+    defer app.deinit();
+    try app.run(root.widget(), .{ .framerate = 60 });
+}
+
 // Re-export run as the public API
 pub fn run(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.Config, hist: *history_mod.History) !void {
     var state = t.State{};
