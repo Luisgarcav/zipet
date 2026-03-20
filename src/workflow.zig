@@ -206,7 +206,19 @@ pub fn executeSilent(
         const rendered = try template.render(allocator, raw_cmd, all_keys, all_vals);
         defer allocator.free(rendered);
 
-        const result = try executor.run(allocator, rendered);
+        var attempt: u8 = 0;
+        const max_attempts: u8 = step.retry + 1; // 1 initial + N retries
+        var result = try executor.run(allocator, rendered);
+
+        while (result.exit_code != 0 and attempt + 1 < max_attempts) {
+            attempt += 1;
+            allocator.free(result.stdout);
+            allocator.free(result.stderr);
+            if (step.retry_delay > 0) {
+                std.time.sleep(@as(u64, step.retry_delay) * std.time.ns_per_s);
+            }
+            result = try executor.run(allocator, rendered);
+        }
 
         const step_success = result.exit_code == 0;
         if (!step_success) all_success = false;
@@ -464,7 +476,34 @@ pub fn execute(
         printOut(allocator, "  \x1b[2m$ {s}\x1b[0m\n", .{rendered});
 
         // Execute
-        const result = try executor.run(allocator, rendered);
+        var attempt: u8 = 0;
+        const max_attempts: u8 = step.retry + 1;
+        var result = try executor.run(allocator, rendered);
+
+        while (result.exit_code != 0 and attempt + 1 < max_attempts) {
+            attempt += 1;
+            // Show output from failed attempt
+            if (result.stdout.len > 0) {
+                writeOut(result.stdout);
+                if (result.stdout[result.stdout.len - 1] != '\n') writeOut("\n");
+            }
+            if (result.stderr.len > 0) {
+                printOut(allocator, "\x1b[31m{s}\x1b[0m", .{result.stderr});
+                if (result.stderr[result.stderr.len - 1] != '\n') writeOut("\n");
+            }
+            allocator.free(result.stdout);
+            allocator.free(result.stderr);
+
+            if (step.retry_delay > 0) {
+                printOut(allocator, "  \x1b[33m⟳ Retry {d}/{d} for \"{s}\" (waiting {d}s...)\x1b[0m\n",
+                    .{ attempt, step.retry, step.name, step.retry_delay });
+                std.time.sleep(@as(u64, step.retry_delay) * std.time.ns_per_s);
+            } else {
+                printOut(allocator, "  \x1b[33m⟳ Retry {d}/{d} for \"{s}\"\x1b[0m\n",
+                    .{ attempt, step.retry, step.name });
+            }
+            result = try executor.run(allocator, rendered);
+        }
 
         if (result.stdout.len > 0) {
             writeOut(result.stdout);
