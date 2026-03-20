@@ -575,12 +575,85 @@ pub fn loadWorkflowFile(
                 try std.fmt.allocPrint(allocator, "Step {d}", .{step_num});
             const on_fail_str = table.getString(step_onfail_key) orelse "stop";
 
+            // Build key strings for new fields
+            const step_capture_key = try std.fmt.allocPrint(allocator, "workflows.{s}.steps.{d}.capture", .{ wf_name, step_num });
+            defer allocator.free(step_capture_key);
+
+            const step_when_key = try std.fmt.allocPrint(allocator, "workflows.{s}.steps.{d}.when", .{ wf_name, step_num });
+            defer allocator.free(step_when_key);
+
+            const step_retry_key = try std.fmt.allocPrint(allocator, "workflows.{s}.steps.{d}.retry", .{ wf_name, step_num });
+            defer allocator.free(step_retry_key);
+
+            const step_retry_delay_key = try std.fmt.allocPrint(allocator, "workflows.{s}.steps.{d}.retry_delay", .{ wf_name, step_num });
+            defer allocator.free(step_retry_delay_key);
+
+            const step_confirm_key = try std.fmt.allocPrint(allocator, "workflows.{s}.steps.{d}.confirm", .{ wf_name, step_num });
+            defer allocator.free(step_confirm_key);
+
+            const step_depends_key = try std.fmt.allocPrint(allocator, "workflows.{s}.steps.{d}.depends_on", .{ wf_name, step_num });
+            defer allocator.free(step_depends_key);
+
+            // Parse values
+            const capture_val: ?[]const u8 = if (table.getString(step_capture_key)) |c| try allocator.dupe(u8, c) else null;
+            const when_val: ?[]const u8 = if (table.getString(step_when_key)) |w| try allocator.dupe(u8, w) else null;
+
+            const retry_val: u8 = blk: {
+                if (table.get(step_retry_key)) |v| {
+                    switch (v) {
+                        .integer => |i| break :blk @intCast(@min(i, 255)),
+                        .string => |s| break :blk std.fmt.parseInt(u8, s, 10) catch 0,
+                        else => {},
+                    }
+                }
+                break :blk 0;
+            };
+
+            const retry_delay_val: u16 = blk: {
+                if (table.get(step_retry_delay_key)) |v| {
+                    switch (v) {
+                        .integer => |i| break :blk @intCast(@min(i, 65535)),
+                        .string => |s| break :blk std.fmt.parseInt(u16, s, 10) catch 0,
+                        else => {},
+                    }
+                }
+                break :blk 0;
+            };
+
+            const confirm_val: bool = blk: {
+                if (table.get(step_confirm_key)) |v| {
+                    switch (v) {
+                        .boolean => |b| break :blk b,
+                        .string => |s| break :blk std.mem.eql(u8, s, "true"),
+                        else => {},
+                    }
+                }
+                break :blk false;
+            };
+
+            // Parse depends_on array
+            var deps_list: std.ArrayList([]const u8) = .{};
+            if (table.getArray(step_depends_key)) |arr| {
+                for (arr) |item| {
+                    switch (item) {
+                        .string => |s| try deps_list.append(allocator, try allocator.dupe(u8, s)),
+                        else => {},
+                    }
+                }
+            }
+
             try steps.append(allocator, .{
                 .name = try allocator.dupe(u8, step_name),
                 .cmd = if (has_cmd) try allocator.dupe(u8, table.getString(step_cmd_key).?) else null,
                 .snippet_ref = if (has_snippet) try allocator.dupe(u8, table.getString(step_snippet_key).?) else null,
                 .on_fail = OnFail.fromString(on_fail_str),
                 .param_overrides = &.{},
+                .capture = capture_val,
+                .depends_on = try deps_list.toOwnedSlice(allocator),
+                .when = when_val,
+                .retry = retry_val,
+                .retry_delay = retry_delay_val,
+                .confirm = confirm_val,
             });
         }
 
@@ -679,6 +752,10 @@ pub fn loadWorkflowFile(
                 allocator.free(step.name);
                 if (step.cmd) |c| allocator.free(c);
                 if (step.snippet_ref) |r| allocator.free(r);
+                if (step.capture) |c| allocator.free(c);
+                if (step.when) |w| allocator.free(w);
+                for (step.depends_on) |dep| allocator.free(dep);
+                if (step.depends_on.len > 0) allocator.free(step.depends_on);
             }
             allocator.free(owned_steps);
             for (owned_params) |p| {
@@ -758,6 +835,10 @@ pub fn deinitRegistry(allocator: std.mem.Allocator) void {
             allocator.free(step.name);
             if (step.cmd) |c| allocator.free(c);
             if (step.snippet_ref) |r| allocator.free(r);
+            if (step.capture) |c| allocator.free(c);
+            if (step.when) |w| allocator.free(w);
+            for (step.depends_on) |dep| allocator.free(dep);
+            if (step.depends_on.len > 0) allocator.free(step.depends_on);
         }
         allocator.free(wf.steps);
         allocator.free(wf.name);
@@ -809,7 +890,32 @@ pub fn saveWorkflow(allocator: std.mem.Allocator, wf: *const Workflow, cfg: conf
             .skip_rest => "skip_rest",
             .ask => "ask",
         };
-        try writer.print("on_fail = \"{s}\"\n\n", .{on_fail_str});
+        try writer.print("on_fail = \"{s}\"\n", .{on_fail_str});
+
+        if (step.capture) |cap| {
+            try writer.print("capture = \"{s}\"\n", .{cap});
+        }
+        if (step.depends_on.len > 0) {
+            try writer.writeAll("depends_on = [");
+            for (step.depends_on, 0..) |dep, di| {
+                if (di > 0) try writer.writeAll(", ");
+                try writer.print("\"{s}\"", .{dep});
+            }
+            try writer.writeAll("]\n");
+        }
+        if (step.when) |w| {
+            try writer.print("when = \"{s}\"\n", .{w});
+        }
+        if (step.retry > 0) {
+            try writer.print("retry = {d}\n", .{step.retry});
+            if (step.retry_delay > 0) {
+                try writer.print("retry_delay = {d}\n", .{step.retry_delay});
+            }
+        }
+        if (step.confirm) {
+            try writer.writeAll("confirm = true\n");
+        }
+        try writer.writeAll("\n");
     }
 
     // Write param configs
