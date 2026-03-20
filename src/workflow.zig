@@ -206,6 +206,22 @@ pub fn executeSilent(
         const rendered = try template.render(allocator, raw_cmd, all_keys, all_vals);
         defer allocator.free(rendered);
 
+        // confirm=true in silent mode: skip the step (no TTY to ask)
+        if (step.confirm) {
+            try step_results.append(allocator, .{
+                .step_name = step.name,
+                .exit_code = 1,
+                .stdout = try allocator.dupe(u8, ""),
+                .stderr = try allocator.dupe(u8, "confirm required but non-interactive"),
+                .skipped = false,
+            });
+            all_success = false;
+            switch (step.on_fail) {
+                .stop, .ask, .skip_rest => break,
+                .@"continue" => continue,
+            }
+        }
+
         var attempt: u8 = 0;
         const max_attempts: u8 = step.retry + 1; // 1 initial + N retries
         var result = try executor.run(allocator, rendered);
@@ -475,6 +491,43 @@ pub fn execute(
 
         printOut(allocator, "  \x1b[2m$ {s}\x1b[0m\n", .{rendered});
 
+        // Confirm prompt (before execution)
+        if (step.confirm) {
+            printOut(allocator, "  \x1b[33m⏸ Step \"{s}\" — proceed? [y/N]\x1b[0m ", .{step.name});
+            var confirm_buf: [8]u8 = undefined;
+            const confirm_input = readLine(&confirm_buf);
+            if (confirm_input) |inp| {
+                if (!std.mem.eql(u8, inp, "y") and !std.mem.eql(u8, inp, "Y")) {
+                    // User declined — skip step
+                    printOut(allocator, "  \x1b[2m⊘ Skipped by user\x1b[0m\n\n", .{});
+                    try step_results.append(allocator, .{
+                        .step_name = step.name,
+                        .exit_code = 0,
+                        .stdout = try allocator.dupe(u8, ""),
+                        .stderr = try allocator.dupe(u8, ""),
+                        .skipped = true,
+                    });
+                    continue; // next step
+                }
+            } else {
+                // No input (no TTY) — fail the step
+                printOut(allocator, "\n  \x1b[31m✗ No TTY for confirmation\x1b[0m\n\n", .{});
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 1,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, "confirm required but non-interactive"),
+                    .skipped = false,
+                });
+                all_success = false;
+                switch (step.on_fail) {
+                    .stop, .ask => break,
+                    .skip_rest => break,
+                    .@"continue" => continue,
+                }
+            }
+        }
+
         // Execute
         var attempt: u8 = 0;
         const max_attempts: u8 = step.retry + 1;
@@ -503,6 +556,93 @@ pub fn execute(
                     .{ attempt, step.retry, step.name });
             }
             result = try executor.run(allocator, rendered);
+        }
+
+        // on_fail=ask: interactive recovery loop (runs before step_results is appended)
+        var ask_skipped = false;
+        if (result.exit_code != 0 and step.on_fail == .ask) {
+            // Show output from final failed attempt before asking
+            if (result.stdout.len > 0) {
+                writeOut(result.stdout);
+                if (result.stdout[result.stdout.len - 1] != '\n') writeOut("\n");
+            }
+            if (result.stderr.len > 0) {
+                printOut(allocator, "\x1b[31m{s}\x1b[0m", .{result.stderr});
+                if (result.stderr[result.stderr.len - 1] != '\n') writeOut("\n");
+            }
+
+            var should_abort = false;
+            ask_loop: while (true) {
+                printOut(allocator, "\x1b[31m✗ Step \"{s}\" failed (exit {d}). [r]etry / [s]kip / [a]bort?\x1b[0m ",
+                    .{ step.name, result.exit_code });
+                var ask_buf: [8]u8 = undefined;
+                const ask_input = readLine(&ask_buf);
+                if (ask_input) |inp| {
+                    if (std.mem.eql(u8, inp, "r") or std.mem.eql(u8, inp, "R")) {
+                        allocator.free(result.stdout);
+                        allocator.free(result.stderr);
+                        result = try executor.run(allocator, rendered);
+                        if (result.exit_code == 0) {
+                            printOut(allocator, "  \x1b[32m✓ OK on retry\x1b[0m\n\n", .{});
+                            break :ask_loop;
+                        }
+                        // Show output from retry attempt before looping
+                        if (result.stdout.len > 0) {
+                            writeOut(result.stdout);
+                            if (result.stdout[result.stdout.len - 1] != '\n') writeOut("\n");
+                        }
+                        if (result.stderr.len > 0) {
+                            printOut(allocator, "\x1b[31m{s}\x1b[0m", .{result.stderr});
+                            if (result.stderr[result.stderr.len - 1] != '\n') writeOut("\n");
+                        }
+                        continue; // ask again
+                    } else if (std.mem.eql(u8, inp, "s") or std.mem.eql(u8, inp, "S")) {
+                        printOut(allocator, "\x1b[33m⏭ Skipping step\x1b[0m\n", .{});
+                        ask_skipped = true;
+                        break :ask_loop;
+                    } else if (std.mem.eql(u8, inp, "a") or std.mem.eql(u8, inp, "A")) {
+                        printOut(allocator, "\x1b[31m⏹ Workflow aborted\x1b[0m\n", .{});
+                        should_abort = true;
+                        break :ask_loop;
+                    }
+                    // Unrecognised input — loop again
+                } else {
+                    // No TTY — behave as stop
+                    printOut(allocator, "\n\x1b[31m⏹ Workflow stopped (non-interactive)\x1b[0m\n", .{});
+                    should_abort = true;
+                    break :ask_loop;
+                }
+            }
+
+            const final_success = result.exit_code == 0 or ask_skipped;
+            if (!final_success) all_success = false;
+
+            if (prev_stdout_owned) allocator.free(prev_stdout);
+            prev_stdout = try allocator.dupe(u8, std.mem.trim(u8, result.stdout, "\n\r"));
+            prev_stdout_owned = true;
+            prev_exit = result.exit_code;
+
+            if (step.capture) |cap_name| {
+                if (result.exit_code == 0) {
+                    const trimmed = std.mem.trim(u8, result.stdout, "\n\r \t");
+                    const owned = try allocator.dupe(u8, trimmed);
+                    if (var_ctx.fetchRemove(cap_name)) |old| {
+                        allocator.free(old.value);
+                    }
+                    try var_ctx.put(cap_name, owned);
+                }
+            }
+
+            try step_results.append(allocator, .{
+                .step_name = step.name,
+                .exit_code = result.exit_code,
+                .stdout = result.stdout,
+                .stderr = result.stderr,
+                .skipped = ask_skipped,
+            });
+
+            if (should_abort) break; // break the outer step loop
+            continue; // skip normal post-execution handling below
         }
 
         if (result.stdout.len > 0) {
@@ -550,11 +690,11 @@ pub fn execute(
         // Handle failure policy
         if (!step_success) {
             switch (step.on_fail) {
-                .stop, .ask => {
-                    // .ask will be properly implemented in Task 7; for now behaves as .stop
+                .stop => {
                     printOut(allocator, "\x1b[31m⏹ Workflow stopped at step '{s}'\x1b[0m\n", .{step.name});
                     break;
                 },
+                .ask => unreachable, // handled above
                 .skip_rest => {
                     printOut(allocator, "\x1b[33m⏭ Skipping remaining steps\x1b[0m\n", .{});
                     break;
