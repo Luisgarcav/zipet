@@ -20,6 +20,11 @@ pub fn topologicalSort(allocator: Allocator, nodes: []const Node) ![]usize {
     const n = nodes.len;
     if (n == 0) return allocator.alloc(usize, 0);
 
+    // Validate node indices match positions
+    for (nodes, 0..) |node, pos| {
+        if (node.index != pos) return GraphError.UnknownDependency;
+    }
+
     // Build name → index lookup
     var name_map = std.StringHashMap(usize).init(allocator);
     defer name_map.deinit();
@@ -97,6 +102,11 @@ pub fn topologicalSort(allocator: Allocator, nodes: []const Node) ![]usize {
 /// Used to mark dependents as skipped when a step fails.
 pub fn dependentsOf(allocator: Allocator, nodes: []const Node, failed_index: usize) ![]usize {
     const n = nodes.len;
+
+    // Validate node indices match positions
+    for (nodes, 0..) |node, pos| {
+        if (node.index != pos) return GraphError.UnknownDependency;
+    }
 
     // Build name → index lookup
     var name_map = std.StringHashMap(usize).init(allocator);

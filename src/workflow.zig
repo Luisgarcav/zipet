@@ -396,11 +396,15 @@ fn emitEvent(
     event_list.append(std.heap.page_allocator, event) catch {};
 }
 
-fn waitForResponse(response_ptr: *?u8) u8 {
+fn waitForResponse(response_ptr: *?u8, mutex: *std.Thread.Mutex) u8 {
     while (true) {
-        if (response_ptr.*) |r| {
-            response_ptr.* = null;
-            return r;
+        {
+            mutex.lock();
+            defer mutex.unlock();
+            if (response_ptr.*) |r| {
+                response_ptr.* = null;
+                return r;
+            }
         }
         std.Thread.sleep(50 * std.time.ns_per_ms);
     }
@@ -640,7 +644,7 @@ fn executeWithEventsInner(
                 .name = step.name,
                 .index = step_idx,
             } });
-            const resp = waitForResponse(response_ptr);
+            const resp = waitForResponse(response_ptr, event_mutex);
             if (resp != 'y' and resp != 'Y') {
                 emitEvent(event_list, event_mutex, .{ .step_skipped = .{
                     .name = step.name,
@@ -726,7 +730,7 @@ fn executeWithEventsInner(
 
             var should_abort = false;
             ask_loop: while (true) {
-                const resp = waitForResponse(response_ptr);
+                const resp = waitForResponse(response_ptr, event_mutex);
                 switch (resp) {
                     'r', 'R' => {
                         allocator.free(result.stdout);
@@ -740,7 +744,7 @@ fn executeWithEventsInner(
                             prev_stdout = try allocator.dupe(u8, std.mem.trim(u8, result.stdout, "\n\r"));
                             prev_stdout_owned = true;
                             prev_exit = result.exit_code;
-                            all_success = true; // recovered
+                            // Step recovered — don't reset all_success globally
                             break :ask_loop;
                         }
                         // Still failed, emit ask again

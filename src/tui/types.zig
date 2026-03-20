@@ -201,12 +201,14 @@ pub const OnFailOption = enum {
     stop,
     @"continue",
     skip_rest,
+    ask,
 
     pub fn label(self: OnFailOption) []const u8 {
         return switch (self) {
             .stop => "stop",
             .@"continue" => "continue",
             .skip_rest => "skip_rest",
+            .ask => "ask",
         };
     }
 
@@ -214,7 +216,8 @@ pub const OnFailOption = enum {
         return switch (self) {
             .stop => .@"continue",
             .@"continue" => .skip_rest,
-            .skip_rest => .stop,
+            .skip_rest => .ask,
+            .ask => .stop,
         };
     }
 };

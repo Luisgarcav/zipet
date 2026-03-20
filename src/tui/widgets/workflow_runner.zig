@@ -38,24 +38,26 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
                 self.state.mode = .normal;
                 return ctx.consumeAndRedraw();
             }
-            if (key.matches('r', .{})) {
-                self.state.wf_runner.user_response = 'r';
-                return ctx.consumeAndRedraw();
-            }
-            if (key.matches('s', .{})) {
-                self.state.wf_runner.user_response = 's';
-                return ctx.consumeAndRedraw();
+            const response_keys = [_]struct { key: u21, val: u8 }{
+                .{ .key = 'r', .val = 'r' },
+                .{ .key = 's', .val = 's' },
+                .{ .key = 'y', .val = 'y' },
+                .{ .key = 'n', .val = 'n' },
+            };
+            for (response_keys) |rk| {
+                if (key.matches(rk.key, .{})) {
+                    const mx = &self.state.wf_runner.mutex;
+                    mx.lock();
+                    self.state.wf_runner.user_response = rk.val;
+                    mx.unlock();
+                    return ctx.consumeAndRedraw();
+                }
             }
             if (key.matches('c', .{}) or key.matches('a', .{})) {
+                const mx = &self.state.wf_runner.mutex;
+                mx.lock();
                 self.state.wf_runner.user_response = 'a';
-                return ctx.consumeAndRedraw();
-            }
-            if (key.matches('y', .{})) {
-                self.state.wf_runner.user_response = 'y';
-                return ctx.consumeAndRedraw();
-            }
-            if (key.matches('n', .{})) {
-                self.state.wf_runner.user_response = 'n';
+                mx.unlock();
                 return ctx.consumeAndRedraw();
             }
             if (key.matches('j', .{})) {
@@ -263,7 +265,13 @@ fn draw(userdata: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxf
     }
 
     // ── Controls bar ──
-    const controls_str = if (runner.is_running)
+    const is_running = blk: {
+        const mx = &@constCast(&self.state.wf_runner).mutex;
+        mx.lock();
+        defer mx.unlock();
+        break :blk runner.is_running;
+    };
+    const controls_str = if (is_running)
         " [r] retry  [s] skip  [c] cancel  [q] quit  [j/k] scroll"
     else
         " Workflow finished. [q] quit  [j/k] scroll";

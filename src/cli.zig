@@ -1302,7 +1302,9 @@ fn cmdWorkflowRunTui(allocator: std.mem.Allocator, name: []const u8, snip_store:
         ) void {
             const result = workflow.executeWithEvents(alloc, w, ss, pk, pv, events, mutex, resp);
             _ = result;
+            mutex.lock();
             runner_state.is_running = false;
+            mutex.unlock();
         }
     }.run, .{
         allocator,
