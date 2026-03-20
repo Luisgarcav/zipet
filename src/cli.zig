@@ -1053,12 +1053,63 @@ fn cmdWorkflowAdd(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: c
         const fail_input = readLine(&fail_buf) orelse break;
         const on_fail = if (fail_input.len > 0) workflow.OnFail.fromString(fail_input) else .stop;
 
+        writeOut("  Capture stdout to variable (empty to skip): ");
+        var capture_buf: [256]u8 = undefined;
+        const capture_input = readLine(&capture_buf) orelse break;
+        const capture_val: ?[]const u8 = if (capture_input.len > 0) try allocator.dupe(u8, capture_input) else null;
+
+        writeOut("  When condition (empty for always): ");
+        var when_buf: [512]u8 = undefined;
+        const when_input = readLine(&when_buf) orelse break;
+        const when_val: ?[]const u8 = if (when_input.len > 0) try allocator.dupe(u8, when_input) else null;
+
+        writeOut("  Retry count (0 for none): ");
+        var retry_buf: [32]u8 = undefined;
+        const retry_input = readLine(&retry_buf) orelse break;
+        const retry_val: u8 = std.fmt.parseInt(u8, retry_input, 10) catch 0;
+
+        const retry_delay_val: u16 = blk: {
+            if (retry_val > 0) {
+                writeOut("  Retry delay in seconds (0 for none): ");
+                var rdelay_buf: [32]u8 = undefined;
+                const rdelay_input = readLine(&rdelay_buf) orelse break :blk 0;
+                break :blk std.fmt.parseInt(u16, rdelay_input, 10) catch 0;
+            }
+            break :blk 0;
+        };
+
+        writeOut("  Require confirmation? [y/N]: ");
+        var confirm_buf: [8]u8 = undefined;
+        const confirm_input = readLine(&confirm_buf) orelse break;
+        const confirm_val: bool = confirm_input.len > 0 and (confirm_input[0] == 'y' or confirm_input[0] == 'Y');
+
+        writeOut("  Depends on steps (comma-separated names, empty for sequential): ");
+        var deps_buf: [1024]u8 = undefined;
+        const deps_input = readLine(&deps_buf) orelse break;
+        var depends_on_list: std.ArrayList([]const u8) = .{};
+        if (deps_input.len > 0) {
+            var deps_iter = std.mem.splitScalar(u8, deps_input, ',');
+            while (deps_iter.next()) |dep_raw| {
+                const dep = std.mem.trim(u8, dep_raw, " \t");
+                if (dep.len > 0) {
+                    try depends_on_list.append(allocator, try allocator.dupe(u8, dep));
+                }
+            }
+        }
+        const depends_on_val = try depends_on_list.toOwnedSlice(allocator);
+
         try steps.append(allocator, .{
             .name = try allocator.dupe(u8, sname),
             .cmd = step_cmd,
             .snippet_ref = step_snippet,
             .on_fail = on_fail,
             .param_overrides = &.{},
+            .capture = capture_val,
+            .depends_on = depends_on_val,
+            .when = when_val,
+            .retry = retry_val,
+            .retry_delay = retry_delay_val,
+            .confirm = confirm_val,
         });
 
         step_num += 1;
