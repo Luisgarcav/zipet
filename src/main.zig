@@ -58,4 +58,5 @@ test {
     _ = @import("workspace.zig");
     _ = @import("history.zig");
     _ = @import("highlight.zig");
+    _ = @import("dag.zig");
 }
