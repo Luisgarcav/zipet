@@ -7,6 +7,7 @@ const store = @import("store.zig");
 const executor = @import("executor.zig");
 const config = @import("config.zig");
 const toml = @import("toml.zig");
+const dag = @import("dag.zig");
 
 pub const OnFail = enum {
     stop,
@@ -130,7 +131,45 @@ pub fn executeSilent(
         if (prev_stdout_owned) allocator.free(prev_stdout);
     }
 
-    for (wf.steps) |step| {
+    // Build DAG nodes
+    var dag_nodes = try allocator.alloc(dag.Node, wf.steps.len);
+    defer allocator.free(dag_nodes);
+    for (wf.steps, 0..) |step, i| {
+        dag_nodes[i] = .{
+            .name = step.name,
+            .index = i,
+            .depends_on = step.depends_on,
+        };
+    }
+
+    const exec_order = dag.topologicalSort(allocator, dag_nodes) catch |err| {
+        if (err == dag.GraphError.CycleDetected) {
+            return WorkflowResult{ .step_results = try step_results.toOwnedSlice(allocator), .success = false, .allocator = allocator };
+        } else if (err == dag.GraphError.UnknownDependency) {
+            return WorkflowResult{ .step_results = try step_results.toOwnedSlice(allocator), .success = false, .allocator = allocator };
+        } else {
+            return err;
+        }
+    };
+    defer allocator.free(exec_order);
+
+    var skipped_set = try allocator.alloc(bool, wf.steps.len);
+    defer allocator.free(skipped_set);
+    @memset(skipped_set, false);
+
+    for (exec_order) |step_idx| {
+        const step = wf.steps[step_idx];
+
+        if (skipped_set[step_idx]) {
+            try step_results.append(allocator, .{
+                .step_name = step.name,
+                .exit_code = 0,
+                .stdout = try allocator.dupe(u8, ""),
+                .stderr = try allocator.dupe(u8, ""),
+                .skipped = true,
+            });
+            continue;
+        }
         const raw_cmd = blk: {
             if (step.cmd) |cmd| {
                 break :blk cmd;
@@ -148,7 +187,16 @@ pub fn executeSilent(
                     });
                     all_success = false;
                     switch (step.on_fail) {
-                        .stop, .skip_rest, .ask => break,
+                        .stop => {
+                            const dependents = try dag.dependentsOf(allocator, dag_nodes, step_idx);
+                            defer allocator.free(dependents);
+                            for (dependents) |dep_idx| {
+                                skipped_set[dep_idx] = true;
+                            }
+                            continue;
+                        },
+                        .skip_rest => break,
+                        .ask => break,
                         .@"continue" => continue,
                     }
                 }
@@ -217,7 +265,15 @@ pub fn executeSilent(
             });
             all_success = false;
             switch (step.on_fail) {
-                .stop, .ask, .skip_rest => break,
+                .stop => {
+                    const dependents = try dag.dependentsOf(allocator, dag_nodes, step_idx);
+                    defer allocator.free(dependents);
+                    for (dependents) |dep_idx| {
+                        skipped_set[dep_idx] = true;
+                    }
+                    continue;
+                },
+                .ask, .skip_rest => break,
                 .@"continue" => continue,
             }
         }
@@ -265,7 +321,14 @@ pub fn executeSilent(
 
         if (!step_success) {
             switch (step.on_fail) {
-                .stop, .skip_rest, .ask => break,
+                .stop => {
+                    const dependents = try dag.dependentsOf(allocator, dag_nodes, step_idx);
+                    defer allocator.free(dependents);
+                    for (dependents) |dep_idx| {
+                        skipped_set[dep_idx] = true;
+                    }
+                },
+                .skip_rest, .ask => break,
                 .@"continue" => {},
             }
         }
@@ -395,8 +458,50 @@ pub fn execute(
 
     printOut(allocator, "\n\x1b[1;36m▶ Running workflow: {s} ({d} steps)\x1b[0m\n\n", .{ workflow.name, workflow.steps.len });
 
-    for (workflow.steps, 0..) |step, step_idx| {
-        printOut(allocator, "\x1b[1m[{d}/{d}] {s}\x1b[0m\n", .{ step_idx + 1, workflow.steps.len, step.name });
+    // Build DAG nodes
+    var dag_nodes = try allocator.alloc(dag.Node, workflow.steps.len);
+    defer allocator.free(dag_nodes);
+    for (workflow.steps, 0..) |wf_step, i| {
+        dag_nodes[i] = .{
+            .name = wf_step.name,
+            .index = i,
+            .depends_on = wf_step.depends_on,
+        };
+    }
+
+    const exec_order = dag.topologicalSort(allocator, dag_nodes) catch |err| {
+        if (err == dag.GraphError.CycleDetected) {
+            printOut(allocator, "\x1b[31m✗ Workflow has circular dependencies\x1b[0m\n", .{});
+            return WorkflowResult{ .step_results = try step_results.toOwnedSlice(allocator), .success = false, .allocator = allocator };
+        } else if (err == dag.GraphError.UnknownDependency) {
+            printOut(allocator, "\x1b[31m✗ Workflow references unknown step in depends_on\x1b[0m\n", .{});
+            return WorkflowResult{ .step_results = try step_results.toOwnedSlice(allocator), .success = false, .allocator = allocator };
+        } else {
+            return err;
+        }
+    };
+    defer allocator.free(exec_order);
+
+    var skipped_set = try allocator.alloc(bool, workflow.steps.len);
+    defer allocator.free(skipped_set);
+    @memset(skipped_set, false);
+
+    for (exec_order, 0..) |step_idx, display_idx| {
+        const step = workflow.steps[step_idx];
+
+        if (skipped_set[step_idx]) {
+            printOut(allocator, "\x1b[1m[{d}/{d}] {s}\x1b[0m \x1b[33m⏭ Skipped (dependency failed)\x1b[0m\n\n", .{ display_idx + 1, workflow.steps.len, step.name });
+            try step_results.append(allocator, .{
+                .step_name = step.name,
+                .exit_code = 0,
+                .stdout = try allocator.dupe(u8, ""),
+                .stderr = try allocator.dupe(u8, ""),
+                .skipped = true,
+            });
+            continue;
+        }
+
+        printOut(allocator, "\x1b[1m[{d}/{d}] {s}\x1b[0m\n", .{ display_idx + 1, workflow.steps.len, step.name });
 
         // Resolve the command for this step
         const raw_cmd = blk: {
@@ -418,7 +523,17 @@ pub fn execute(
                     });
                     all_success = false;
                     switch (step.on_fail) {
-                        .stop, .skip_rest, .ask => break,
+                        .stop => {
+                            const dependents = try dag.dependentsOf(allocator, dag_nodes, step_idx);
+                            defer allocator.free(dependents);
+                            for (dependents) |dep_idx| {
+                                skipped_set[dep_idx] = true;
+                            }
+                            printOut(allocator, "\x1b[31m⏹ Workflow stopped at step '{s}'\x1b[0m\n", .{step.name});
+                            continue;
+                        },
+                        .skip_rest => break,
+                        .ask => break,
                         .@"continue" => continue,
                     }
                 }
@@ -521,7 +636,15 @@ pub fn execute(
                 });
                 all_success = false;
                 switch (step.on_fail) {
-                    .stop, .ask => break,
+                    .stop => {
+                        const dependents = try dag.dependentsOf(allocator, dag_nodes, step_idx);
+                        defer allocator.free(dependents);
+                        for (dependents) |dep_idx| {
+                            skipped_set[dep_idx] = true;
+                        }
+                        continue;
+                    },
+                    .ask => break,
                     .skip_rest => break,
                     .@"continue" => continue,
                 }
@@ -691,8 +814,14 @@ pub fn execute(
         if (!step_success) {
             switch (step.on_fail) {
                 .stop => {
+                    // Mark all dependents as skipped
+                    const dependents = try dag.dependentsOf(allocator, dag_nodes, step_idx);
+                    defer allocator.free(dependents);
+                    for (dependents) |dep_idx| {
+                        skipped_set[dep_idx] = true;
+                    }
                     printOut(allocator, "\x1b[31m⏹ Workflow stopped at step '{s}'\x1b[0m\n", .{step.name});
-                    break;
+                    // Don't break — continue loop, skipped steps will be caught by skipped_set check
                 },
                 .ask => unreachable, // handled above
                 .skip_rest => {
