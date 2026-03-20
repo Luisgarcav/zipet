@@ -6,6 +6,7 @@ const config = @import("config.zig");
 const workflow = @import("workflow.zig");
 const pack = @import("pack.zig");
 const workspace = @import("workspace.zig");
+const history = @import("history.zig");
 
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
@@ -31,12 +32,17 @@ pub fn main() !void {
     defer snip_store.deinit();
     defer workflow.deinitRegistry(gpa);
 
+    // Initialize history (frecency tracking)
+    var hist = history.History.init(gpa, cfg);
+    defer hist.deinit();
+    hist.load() catch {};
+
     // Parse and dispatch CLI commands
     if (args.len <= 1) {
         // No arguments → open TUI
-        try tui.run(gpa, &snip_store, cfg);
+        try tui.run(gpa, &snip_store, cfg, &hist);
     } else {
-        try cli.dispatch(gpa, args[1..], &snip_store, cfg);
+        try cli.dispatch(gpa, args[1..], &snip_store, cfg, &hist);
     }
 }
 
@@ -48,5 +54,8 @@ test {
     _ = @import("config.zig");
     _ = @import("workflow.zig");
     _ = @import("pack.zig");
+    _ = @import("update.zig");
     _ = @import("workspace.zig");
+    _ = @import("history.zig");
+    _ = @import("highlight.zig");
 }

@@ -656,6 +656,32 @@ pub fn loadWorkflowFile(
         const owned_params = try params_list.toOwnedSlice(allocator);
         const owned_steps = try steps.toOwnedSlice(allocator);
 
+        // Check for duplicates before adding
+        var already_exists = false;
+        for (snip_store.snippets.items) |existing| {
+            if (std.mem.eql(u8, existing.name, wf_name) and existing.kind == .workflow) {
+                already_exists = true;
+                break;
+            }
+        }
+        if (already_exists) {
+            // Free everything we allocated for this workflow
+            for (owned_steps) |step| {
+                allocator.free(step.name);
+                if (step.cmd) |c| allocator.free(c);
+                if (step.snippet_ref) |r| allocator.free(r);
+            }
+            allocator.free(owned_steps);
+            for (owned_params) |p| {
+                allocator.free(p.name);
+                if (p.prompt) |pr| allocator.free(pr);
+                if (p.default) |d| allocator.free(d);
+                if (p.command) |c| allocator.free(c);
+            }
+            allocator.free(owned_params);
+            continue;
+        }
+
         // Store the workflow as a Snippet with kind=.workflow
         try snip_store.snippets.append(allocator, .{
             .name = try allocator.dupe(u8, wf_name),
@@ -705,8 +731,20 @@ pub fn getWorkflow(allocator: std.mem.Allocator, name: []const u8) ?*const Workf
 
 pub fn deinitRegistry(allocator: std.mem.Allocator) void {
     if (!g_workflows_initialized) return;
+
+    // Collect all values first, then free — avoids use-after-free on HashMap keys
+    var vals: std.ArrayList(Workflow) = .{};
+    defer vals.deinit(allocator);
     var iter = g_workflows.valueIterator();
     while (iter.next()) |wf| {
+        vals.append(allocator, wf.*) catch {};
+    }
+    // Clear the HashMap first (releases its internal storage)
+    g_workflows.deinit();
+    g_workflows_initialized = false;
+
+    // Now free all the owned data
+    for (vals.items) |wf| {
         for (wf.steps) |step| {
             allocator.free(step.name);
             if (step.cmd) |c| allocator.free(c);
@@ -716,9 +754,8 @@ pub fn deinitRegistry(allocator: std.mem.Allocator) void {
         allocator.free(wf.name);
         allocator.free(wf.desc);
         allocator.free(wf.namespace);
+        // Note: wf.params is shared with store's snippet entry — store frees it
     }
-    g_workflows.deinit();
-    g_workflows_initialized = false;
 }
 
 /// Save a workflow to a TOML file.

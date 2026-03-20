@@ -209,7 +209,6 @@ pub const ValidationResult = struct {
 };
 
 pub fn validateForPublish(allocator: std.mem.Allocator, pack_path: []const u8) !ValidationResult {
-    const toml = @import("toml.zig");
 
     const file = std.fs.cwd().openFile(pack_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
@@ -234,12 +233,12 @@ pub fn validateForPublish(allocator: std.mem.Allocator, pack_path: []const u8) !
 }
 
 fn validateContent(allocator: std.mem.Allocator, content: []const u8) !ValidationResult {
-    const toml = @import("toml.zig");
+    const toml_mod = @import("toml.zig");
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const table = toml.parse(arena.allocator(), content) catch {
+    const table = toml_mod.parse(arena.allocator(), content) catch {
         var errors: std.ArrayList([]const u8) = .{};
         try errors.append(allocator, try allocator.dupe(u8, "Invalid TOML syntax"));
         return .{ .valid = false, .errors = try errors.toOwnedSlice(allocator) };

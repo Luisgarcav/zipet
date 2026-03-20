@@ -348,6 +348,7 @@ pub const Store = struct {
 
         for (self.snippets.items) |snip| {
             if (!std.mem.eql(u8, snip.namespace, namespace)) continue;
+            if (snip.kind == .workflow) continue; // workflows are saved separately
 
             try writer.print("[snippets.{s}]\n", .{snip.name});
             try writer.print("desc = \"{s}\"\n", .{snip.desc});

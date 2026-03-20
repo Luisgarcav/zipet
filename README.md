@@ -28,6 +28,23 @@ That's it. The script detects your OS and architecture, downloads the right bina
 
 ---
 
+## 🔄 Update
+
+```bash
+zipet update
+```
+
+That's it. zipet checks GitHub for the latest release, compares versions, and replaces itself automatically.
+
+```bash
+# Force update even if local version is newer
+zipet update --force
+```
+
+> You can also reinstall from scratch: `curl -sSL https://raw.githubusercontent.com/Luisgarcav/zipet/main/scripts/install.sh | bash`
+
+---
+
 ## ✨ Why zipet?
 
 You type the same commands over and over. You forget that perfect `find` incantation. Your `~/.bash_history` is a graveyard of useful one-liners you'll never find again.
@@ -116,23 +133,9 @@ Use these anywhere in your commands — they resolve automatically:
 
 Launch with just `zipet` — a vim-native interface powered by [libvaxis](https://github.com/rockorager/libvaxis):
 
-```
-┌──────────────────────────────────────────────────┐
-│  zipet                              [global] ? │
-│  / search...                                     │
-│                                                   │
-│  ▸ ● docker-build     Build Docker image          │
-│    ● find-large       Find large files            │
-│    ● disk-usage       Show disk usage sorted      │
-│    ⚡ deploy-all      [workflow] Deploy pipeline   │
-│                                                   │
-│  ──── Preview ────                                │
-│  $ docker build -t {{image}}:{{tag}} .            │
-│  Tags: docker, build                              │
-│                                                   │
-│  j/k Navigate  Enter Run  a Add  / Search  ? Help│
-└──────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/tui-screenshot.png" alt="zipet TUI screenshot" width="720" />
+</p>
 
 **Keybindings:**
 
@@ -214,6 +217,10 @@ Each parallel item runs in its own thread. Results show exit codes, duration, st
 
 ### 📦 Packs
 
+<p align="center">
+  <img src="assets/packs-screenshot.png" alt="zipet Pack Browser" width="720" />
+</p>
+
 Shareable collections of snippets and workflows. Install from built-in registry, local files, or URLs:
 
 ```bash
@@ -250,6 +257,38 @@ zipet pack uninstall devops
 | `git-power` | Advanced Git workflows and shortcuts |
 | `sysadmin` | Linux system administration essentials |
 | `web-dev` | HTTP testing, API debugging, JWT, encoding |
+
+#### 🌐 Community Packs
+
+Share and discover packs created by other users through the [community registry](https://github.com/Luisgarcav/zipet-community-packs):
+
+```bash
+# Search community packs
+zipet pack search docker
+
+# Browse all community packs
+zipet pack browse
+
+# Install a community pack
+zipet pack install community/docker-toolkit
+
+# Install into a workspace
+zipet pack install community/docker-toolkit --workspace=myproject
+```
+
+**Publishing your own pack:**
+
+```bash
+# 1. Create your pack
+zipet pack create my-awesome-pack --namespace=general
+
+# 2. Validate and get publishing instructions
+zipet pack publish my-awesome-pack.toml
+
+# 3. Follow the instructions to submit via PR or GitHub Issue
+```
+
+The `publish` command validates your pack, shows its contents, and gives you step-by-step instructions to submit it to the community registry. See the [community repo](https://github.com/Luisgarcav/zipet-community-packs) for guidelines.
 
 ---
 
@@ -457,10 +496,14 @@ editor = "vim"           # Editor for 'edit' command
 | `zipet parallel <names...> [-- key=val]` | Run in parallel |
 | `zipet par` | Alias for `parallel` |
 | `zipet pack ls\|install\|uninstall\|create\|info` | Pack management |
+| `zipet pack search <query>` | Search community packs |
+| `zipet pack browse` | Browse all community packs |
+| `zipet pack publish <file>` | Validate & publish pack to community |
 | `zipet workspace ls\|create\|use\|rm\|current` | Workspace management |
 | `zipet ws` | Alias for `workspace` |
 | `zipet export [--json]` | Export all snippets |
 | `zipet import <file\|url>` | Import snippets |
+| `zipet update` | Self-update to latest version |
 | `zipet init` | Initialize config directory |
 | `zipet shell <bash\|zsh\|fish>` | Output shell integration |
 | `zipet help` | Show help |

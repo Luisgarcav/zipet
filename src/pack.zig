@@ -19,6 +19,7 @@ pub const PackMeta = struct {
     snippet_count: usize,
     workflow_count: usize,
     installed: bool,
+    is_community: bool = false,
 };
 
 /// Get packs directory

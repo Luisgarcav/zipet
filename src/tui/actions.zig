@@ -5,15 +5,20 @@ const config = @import("../config.zig");
 const executor = @import("../executor.zig");
 const template = @import("../template.zig");
 const workflow_mod = @import("../workflow.zig");
+const history_mod = @import("../history.zig");
 const pack_mod = @import("../pack.zig");
 const workspace_mod = @import("../workspace.zig");
 const t = @import("types.zig");
 const utils = @import("utils.zig");
 
 const State = t.State;
-const FormState = t.FormState;
 const OutputBuf = t.OutputBuf;
 const MAX_PARAMS = t.MAX_PARAMS;
+
+fn setOutputTitle(allocator: std.mem.Allocator, state: *State, title: []const u8) void {
+    if (state.output_title) |old| allocator.free(old);
+    state.output_title = allocator.dupe(u8, title) catch null;
+}
 
 pub fn initParamInput(state: *State, snippet_idx: usize, snip: *const store.Snippet) void {
     state.param_input = .{};
@@ -21,33 +26,32 @@ pub fn initParamInput(state: *State, snippet_idx: usize, snip: *const store.Snip
     state.param_input.is_workflow = snip.kind == .workflow;
     const count = @min(snip.params.len, MAX_PARAMS);
     state.param_input.param_count = count;
+    state.param_input.needs_reset = true;
     for (0..count) |i| {
         state.param_input.labels[i] = snip.params[i].prompt orelse snip.params[i].name;
         state.param_input.defaults[i] = snip.params[i].default;
-        if (snip.params[i].default) |d| {
-            state.param_input.fields[i].setText(d);
-        }
     }
 }
 
-pub fn submitForm(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store) void {
-    const f = &state.form;
-    const name = f.fields[FormState.F_NAME].text();
-    const cmd = f.fields[FormState.F_CMD].text();
+pub const FormValues = struct {
+    name: []const u8,
+    desc: []const u8,
+    cmd: []const u8,
+    tags_str: []const u8,
+    namespace: []const u8,
+    purpose: t.FormPurpose,
+    editing_snip_idx: ?usize,
+};
 
-    if (name.len == 0) {
-        f.error_msg = "Name is required";
-        return;
-    }
-    if (cmd.len == 0) {
-        f.error_msg = "Command is required";
-        return;
-    }
+pub fn submitForm(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store, hist: *history_mod.History, values: FormValues) ?[]const u8 {
+    if (values.name.len == 0) return "Name is required";
+    if (values.cmd.len == 0) return "Command is required";
 
-    const desc = f.fields[FormState.F_DESC].text();
-    const tags_str = f.fields[FormState.F_TAGS].text();
-    const ns = f.fields[FormState.F_NS].text();
-    const namespace = if (ns.len > 0) ns else "general";
+    const name = values.name;
+    const cmd = values.cmd;
+    const desc = values.desc;
+    const tags_str = values.tags_str;
+    const namespace = if (values.namespace.len > 0) values.namespace else "general";
 
     // Parse tags
     var tags: std.ArrayList([]const u8) = .{};
@@ -72,95 +76,106 @@ pub fn submitForm(allocator: std.mem.Allocator, state: *State, snip_store: *stor
         } else |_| {}
     }
 
-    if (f.purpose == .edit) {
-        if (f.editing_snip_idx) |old_idx| {
+    if (values.purpose == .edit) {
+        if (values.editing_snip_idx) |old_idx| {
             const old_name = snip_store.snippets.items[old_idx].name;
             snip_store.remove(old_name) catch {};
         }
     }
 
     const snippet = store.Snippet{
-        .name = allocator.dupe(u8, name) catch return,
-        .desc = allocator.dupe(u8, desc) catch return,
-        .cmd = allocator.dupe(u8, cmd) catch return,
+        .name = allocator.dupe(u8, name) catch return null,
+        .desc = allocator.dupe(u8, desc) catch return null,
+        .cmd = allocator.dupe(u8, cmd) catch return null,
         .tags = tags.toOwnedSlice(allocator) catch &.{},
         .params = params,
-        .namespace = allocator.dupe(u8, namespace) catch return,
+        .namespace = allocator.dupe(u8, namespace) catch return null,
         .kind = .snippet,
     };
 
     snip_store.add(snippet) catch {};
     allocator.free(state.filtered_indices);
-    state.filtered_indices = utils.updateFilter(allocator, snip_store, state.searchQuery()) catch &.{};
-    state.message = switch (f.purpose) {
+    state.filtered_indices = utils.updateFilterFrecency(allocator, snip_store, state.searchQuery(), null, hist) catch &.{};
+    state.message = switch (values.purpose) {
         .add => "✓ Snippet added",
         .edit => "✓ Snippet updated",
         .paste => "✓ Pasted as snippet",
     };
     state.mode = .normal;
+    return null;
 }
 
-pub fn submitParamInput(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store, cfg: config.Config) !void {
+pub fn submitParamInput(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store, cfg: config.Config, hist: *history_mod.History, param_values: []const []const u8) !void {
     const pi = &state.param_input;
     const snip = &snip_store.snippets.items[pi.snippet_idx];
 
     var param_keys = try allocator.alloc([]const u8, pi.param_count);
     defer allocator.free(param_keys);
-    var param_values = try allocator.alloc([]const u8, pi.param_count);
+
+    // Apply defaults for empty values
+    var resolved_values = try allocator.alloc([]const u8, pi.param_count);
     defer {
-        for (param_values[0..pi.param_count]) |v| allocator.free(v);
-        allocator.free(param_values);
+        for (resolved_values[0..pi.param_count]) |v| allocator.free(v);
+        allocator.free(resolved_values);
     }
 
     for (0..pi.param_count) |i| {
         param_keys[i] = snip.params[i].name;
-        const val = pi.fields[i].text();
+        const val = if (i < param_values.len) param_values[i] else "";
         if (val.len == 0 and pi.defaults[i] != null)
-            param_values[i] = try allocator.dupe(u8, pi.defaults[i].?)
+            resolved_values[i] = try allocator.dupe(u8, pi.defaults[i].?)
         else
-            param_values[i] = try allocator.dupe(u8, val);
+            resolved_values[i] = try allocator.dupe(u8, val);
     }
 
     if (snip.kind == .workflow) {
-        try executeWorkflow(allocator, state, snip, snip_store, param_keys, param_values);
+        try executeWorkflow(allocator, state, snip, snip_store, param_keys, resolved_values, hist);
     } else {
-        const rendered = try template.render(allocator, snip.cmd, param_keys, param_values);
+        const rendered = try template.render(allocator, snip.cmd, param_keys, resolved_values);
         defer allocator.free(rendered);
-        try executeAndShowOutput(allocator, state, snip.name, rendered);
+        try executeAndShowOutput(allocator, state, snip.name, rendered, hist);
     }
     _ = cfg;
 }
 
-pub fn executeSnippetDirect(allocator: std.mem.Allocator, state: *State, snip: *const store.Snippet, cfg: config.Config, snip_store: *store.Store) !void {
+pub fn executeSnippetDirect(allocator: std.mem.Allocator, state: *State, snip: *const store.Snippet, cfg: config.Config, snip_store: *store.Store, hist: *history_mod.History) !void {
     _ = cfg;
     if (snip.kind == .workflow) {
-        try executeWorkflow(allocator, state, snip, snip_store, &.{}, &.{});
+        try executeWorkflow(allocator, state, snip, snip_store, &.{}, &.{}, hist);
     } else {
         const rendered = try template.render(allocator, snip.cmd, &.{}, &.{});
         defer allocator.free(rendered);
-        try executeAndShowOutput(allocator, state, snip.name, rendered);
+        try executeAndShowOutput(allocator, state, snip.name, rendered, hist);
     }
 }
 
-pub fn executeAndShowOutput(allocator: std.mem.Allocator, state: *State, name: []const u8, cmd: []const u8) !void {
+pub fn executeAndShowOutput(allocator: std.mem.Allocator, state: *State, name: []const u8, cmd: []const u8, hist: *history_mod.History) !void {
     state.output.deinit();
     state.output = OutputBuf.init(allocator);
-    state.output_scroll = 0;
 
-    state.output_title = allocator.dupe(u8, name) catch "";
+    setOutputTitle(allocator, state, name);
 
     state.output.addFmt(allocator, "$ {s}", .{cmd}, .cmd);
     state.output.add("", .normal);
 
+    var timer = std.time.Timer.start() catch null;
+
     const result = executor.run(allocator, cmd) catch |err| {
         state.output.addFmt(allocator, "Error: {}", .{err}, .err);
         state.mode = .output_view;
+        // Record failed execution
+        hist.record(name, 1, 0) catch {};
         return;
     };
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
     }
+
+    const duration_ms: u64 = if (timer) |*t2| t2.read() / std.time.ns_per_ms else 0;
+
+    // Record in history
+    hist.record(name, result.exit_code, duration_ms) catch {};
 
     if (result.stdout.len > 0) state.output.addMultiline(result.stdout, .normal);
 
@@ -180,11 +195,10 @@ pub fn executeAndShowOutput(allocator: std.mem.Allocator, state: *State, name: [
     state.mode = .output_view;
 }
 
-pub fn executeWorkflow(allocator: std.mem.Allocator, state: *State, snip: *const store.Snippet, snip_store: *store.Store, param_keys: []const []const u8, param_values: []const []const u8) !void {
+pub fn executeWorkflow(allocator: std.mem.Allocator, state: *State, snip: *const store.Snippet, snip_store: *store.Store, param_keys: []const []const u8, param_values: []const []const u8, hist: *history_mod.History) !void {
     state.output.deinit();
     state.output = OutputBuf.init(allocator);
-    state.output_scroll = 0;
-    state.output_title = allocator.dupe(u8, snip.name) catch "";
+    setOutputTitle(allocator, state, snip.name);
 
     const wf = workflow_mod.getWorkflow(allocator, snip.name);
     if (wf == null) {
@@ -193,7 +207,7 @@ pub fn executeWorkflow(allocator: std.mem.Allocator, state: *State, snip: *const
         return;
     }
 
-    state.output.addFmt(allocator, ">> Workflow: {s}", .{snip.name}, .header);
+    state.output.addFmt(allocator, "⚡Workflow: {s}", .{snip.name}, .header);
     state.output.add(snip.desc, .dim);
     state.output.addFmt(allocator, "Running {d} steps...", .{wf.?.steps.len}, .dim);
     state.output.add("", .normal);
@@ -224,10 +238,71 @@ pub fn executeWorkflow(allocator: std.mem.Allocator, state: *State, snip: *const
         state.output.add("", .normal);
     }
 
-    if (result.success)
-        state.output.add("✓ Workflow completed successfully", .success)
-    else
+    if (result.success) {
+        state.output.add("✓ Workflow completed successfully", .success);
+        hist.record(snip.name, 0, 0) catch {};
+    } else {
         state.output.add("✗ Workflow completed with errors", .err);
+        hist.record(snip.name, 1, 0) catch {};
+    }
+
+    state.mode = .output_view;
+}
+
+/// Show execution history in the output view.
+pub fn showHistory(allocator: std.mem.Allocator, state: *State, hist: *history_mod.History) void {
+    state.output.deinit();
+    state.output = OutputBuf.init(allocator);
+    setOutputTitle(allocator, state, "History");
+
+    const entries = hist.recent(allocator, 100) catch {
+        state.output.add("Failed to load history", .err);
+        state.mode = .output_view;
+        return;
+    };
+    defer allocator.free(entries);
+
+    if (entries.len == 0) {
+        state.output.add("No execution history yet.", .dim);
+        state.output.add("Run some snippets and they'll appear here.", .dim);
+        state.mode = .output_view;
+        return;
+    }
+
+    state.output.addFmt(allocator, "── Recent Executions ({d} total) ──", .{hist.entries.items.len}, .header);
+    state.output.add("", .normal);
+
+    for (entries) |e| {
+        const time_str = history_mod.formatRelativeTime(allocator, e.timestamp) catch allocator.dupe(u8, "?") catch "?";
+        defer allocator.free(time_str);
+
+        const status: []const u8 = if (e.exit_code == 0) "✓" else "✗";
+        const style: t.LineStyle = if (e.exit_code == 0) .success else .err;
+
+        if (e.duration_ms > 0) {
+            state.output.addFmt(allocator, "  {s} {s}  ({s}, {d}ms)", .{ status, e.snippet_name, time_str, e.duration_ms }, style);
+        } else {
+            state.output.addFmt(allocator, "  {s} {s}  ({s})", .{ status, e.snippet_name, time_str }, style);
+        }
+    }
+
+    state.output.add("", .normal);
+
+    // Show frecency top 10
+    const scores = hist.frecencyScores(allocator) catch {
+        state.mode = .output_view;
+        return;
+    };
+    defer allocator.free(scores);
+
+    if (scores.len > 0) {
+        state.output.add("── Frecency Rankings ──", .header);
+        state.output.add("", .normal);
+        const show = @min(scores.len, 10);
+        for (scores[0..show], 0..) |s, i| {
+            state.output.addFmt(allocator, "  {d}. {s}  (score: {d:.1}, runs: {d})", .{ i + 1, s.name, s.score, s.run_count }, .normal);
+        }
+    }
 
     state.mode = .output_view;
 }
@@ -385,8 +460,7 @@ pub fn openExternalEditor(allocator: std.mem.Allocator, snip: *const store.Snipp
 pub fn buildExportOutput(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store) void {
     state.output.deinit();
     state.output = OutputBuf.init(allocator);
-    state.output_scroll = 0;
-    state.output_title = allocator.dupe(u8, "Export") catch "";
+    setOutputTitle(allocator, state, "Export");
 
     for (snip_store.snippets.items) |snip| {
         if (snip.kind == .workflow) continue;
@@ -461,8 +535,7 @@ pub fn executeSelectedParallel(allocator: std.mem.Allocator, state: *State, snip
 
     state.output.deinit();
     state.output = OutputBuf.init(allocator);
-    state.output_scroll = 0;
-    state.output_title = allocator.dupe(u8, "Parallel Execution") catch "";
+    setOutputTitle(allocator, state, "Parallel Execution");
 
     // Collect items to run
     var items: std.ArrayList(executor.ParallelItem) = .{};
@@ -498,7 +571,7 @@ pub fn executeSelectedParallel(allocator: std.mem.Allocator, state: *State, snip
         return;
     }
 
-    state.output.addFmt(allocator, ">> Running {d} snippets in parallel...", .{items.items.len}, .header);
+    state.output.addFmt(allocator, "⚡Running {d} snippets in parallel...", .{items.items.len}, .header);
     state.output.add("", .normal);
 
     const results = executor.runParallel(allocator, items.items) catch |err| {
@@ -574,11 +647,9 @@ pub fn deleteSelected(allocator: std.mem.Allocator, state: *State, snip_store: *
 
     if (state.filtered_indices.len == 0) {
         state.cursor = 0;
-        state.scroll_offset = 0;
     } else if (state.cursor >= state.filtered_indices.len) {
         state.cursor = state.filtered_indices.len - 1;
     }
-    utils.adjustScroll(state, 24);
 
     if (removed > 0) {
         var buf: [64]u8 = undefined;
@@ -612,5 +683,80 @@ pub fn openPackBrowser(allocator: std.mem.Allocator, state: *State, cfg: config.
     state.pack_list = try pack_mod.listAvailable(allocator, cfg);
     state.pack_cursor = 0;
     state.pack_scroll = 0;
+    state.pack_search_len = 0;
+    state.pack_search_active = false;
+    if (state.pack_filtered_indices.len > 0) allocator.free(state.pack_filtered_indices);
+    state.pack_filtered_indices = &.{};
+    state.pack_community_loaded = false;
     state.mode = .pack_browser;
+}
+
+pub fn loadCommunityIntoPackList(allocator: std.mem.Allocator, state: *State) void {
+    if (state.pack_community_loaded) return;
+
+    const community = @import("../community.zig");
+    const index = community.fetchIndexCached(allocator) catch return;
+    defer community.freeIndex(allocator, index);
+
+    if (!index.fetched or index.packs.len == 0) return;
+
+    // Build a set of existing local pack names for dedup
+    var existing = std.StringHashMap(void).init(allocator);
+    defer existing.deinit();
+    for (state.pack_list) |p| {
+        existing.put(p.name, {}) catch {};
+    }
+
+    // Count new community packs
+    var new_count: usize = 0;
+    for (index.packs) |cp| {
+        if (!existing.contains(cp.name)) new_count += 1;
+    }
+
+    if (new_count == 0) {
+        state.pack_community_loaded = true;
+        return;
+    }
+
+    // Build new combined list
+    const local_count = state.pack_list.len;
+    const combined = allocator.alloc(pack_mod.PackMeta, local_count + new_count) catch return;
+    // Copy existing local packs
+    @memcpy(combined[0..local_count], state.pack_list);
+    // Free old slice (but not individual items — they're now in combined)
+    allocator.free(state.pack_list);
+
+    var ci: usize = local_count;
+    for (index.packs) |cp| {
+        if (existing.contains(cp.name)) continue;
+
+        // Dupe all strings since index will be freed
+        var tags_duped: []const []const u8 = &.{};
+        if (cp.tags.len > 0) {
+            const t_slice = allocator.alloc([]const u8, cp.tags.len) catch continue;
+            var valid: usize = 0;
+            for (cp.tags) |tag| {
+                t_slice[valid] = allocator.dupe(u8, tag) catch continue;
+                valid += 1;
+            }
+            tags_duped = t_slice[0..valid];
+        }
+
+        combined[ci] = .{
+            .name = allocator.dupe(u8, cp.name) catch continue,
+            .description = allocator.dupe(u8, cp.description) catch continue,
+            .author = allocator.dupe(u8, cp.author) catch continue,
+            .version = allocator.dupe(u8, cp.version) catch continue,
+            .category = allocator.dupe(u8, cp.category) catch continue,
+            .tags = tags_duped,
+            .snippet_count = cp.snippet_count,
+            .workflow_count = cp.workflow_count,
+            .installed = false,
+            .is_community = true,
+        };
+        ci += 1;
+    }
+
+    state.pack_list = combined[0..ci];
+    state.pack_community_loaded = true;
 }

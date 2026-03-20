@@ -147,6 +147,9 @@ pub const FormState = struct {
     purpose: FormPurpose = .add,
     editing_snip_idx: ?usize = null,
     error_msg: ?[]const u8 = null,
+    needs_reset: bool = false,
+    /// Cached clipboard text for paste mode (freed by FormScreen after populating fields).
+    paste_cmd_cache: ?[]const u8 = null,
 
     pub const F_NAME = 0;
     pub const F_DESC = 1;
@@ -157,6 +160,7 @@ pub const FormState = struct {
     pub fn init(purpose: FormPurpose) FormState {
         var f = FormState{};
         f.purpose = purpose;
+        f.needs_reset = true;
         f.field_count = 5;
         f.labels = .{ "Name", "Description", "Command", "Tags", "Namespace", "" };
         f.fields[F_NS].setText("general");
@@ -180,6 +184,7 @@ pub const ParamInputState = struct {
     snippet_idx: usize = 0,
     is_workflow: bool = false,
     rendered_cmd: ?[]const u8 = null,
+    needs_reset: bool = false,
 
     pub fn activeField(self: *ParamInputState) *TextField {
         return &self.fields[self.active];
@@ -270,9 +275,13 @@ pub const WorkflowFormState = struct {
     // Whether we're editing the new step fields or browsing the step list
     editing_new_step: bool = true,
 
+    // Reset flag: when true, WorkflowFormWidget should re-populate its vxfw.TextFields
+    needs_reset: bool = false,
+
     pub fn init() WorkflowFormState {
         var s = WorkflowFormState{};
         s.info_fields[F_NS].setText("general");
+        s.needs_reset = true;
         return s;
     }
 
@@ -355,12 +364,12 @@ pub const OutputBuf = struct {
 pub const State = struct {
     mode: Mode = .normal,
     cursor: usize = 0,
-    scroll_offset: usize = 0,
     search_buf: [256]u8 = [_]u8{0} ** 256,
     search_len: usize = 0,
     command_buf: [256]u8 = [_]u8{0} ** 256,
     command_len: usize = 0,
     preview_visible: bool = true,
+    preview_popup: bool = false,
     running: bool = true,
     filtered_indices: []usize = &.{},
     message: ?[]const u8 = null,
@@ -378,8 +387,7 @@ pub const State = struct {
     param_input: ParamInputState = .{},
     wf_form: WorkflowFormState = .{},
     output: OutputBuf = undefined,
-    output_scroll: usize = 0,
-    output_title: []const u8 = "",
+    output_title: ?[]const u8 = null,
 
     // Workspace state
     active_workspace: ?[]const u8 = null,
@@ -454,11 +462,59 @@ pub const State = struct {
         return self.command_buf[0..self.command_len];
     }
 
-    pub fn listHeight(self: *State, term_rows: u16) usize {
-        const rows: usize = @intCast(term_rows);
-        const chrome: usize = if (self.preview_visible) 8 else 4;
-        if (rows <= chrome) return 1;
-        return rows - chrome;
+};
+
+// ── FlexGuard: wraps any widget that asserts max.height/width != null ──
+// FlexColumn's first layout pass sends max.height = null to measure intrinsic sizes.
+// Widgets like ListView, ScrollView, FlexRow assert non-null constraints.
+// This wrapper returns a zero-height surface during that pass and delegates normally otherwise.
+pub const FlexGuard = struct {
+    inner: vxfw.Widget,
+
+    pub fn widget(self: *const FlexGuard) vxfw.Widget {
+        return .{
+            .userdata = @constCast(@ptrCast(self)),
+            .drawFn = drawFn,
+        };
+    }
+
+    fn drawFn(ptr: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxfw.Surface {
+        const self: *const FlexGuard = @ptrCast(@alignCast(ptr));
+        if (ctx.max.height == null or ctx.max.width == null) {
+            return vxfw.Surface.init(ctx.arena, self.inner, .{ .width = 0, .height = 0 });
+        }
+        return self.inner.draw(ctx);
+    }
+};
+
+// Convenience aliases
+pub const ListViewGuard = struct {
+    inner: *vxfw.ListView,
+    pub fn widget(self: *const ListViewGuard) vxfw.Widget {
+        // We can't directly create FlexGuard here since we need to call inner.widget()
+        // So we keep the direct approach
+        return .{ .userdata = @constCast(@ptrCast(self)), .drawFn = drawFn };
+    }
+    fn drawFn(ptr: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxfw.Surface {
+        const self: *const ListViewGuard = @ptrCast(@alignCast(ptr));
+        if (ctx.max.height == null or ctx.max.width == null) {
+            return vxfw.Surface.init(ctx.arena, self.inner.widget(), .{ .width = 0, .height = 0 });
+        }
+        return self.inner.draw(ctx);
+    }
+};
+
+pub const ScrollViewGuard = struct {
+    inner: *vxfw.ScrollView,
+    pub fn widget(self: *const ScrollViewGuard) vxfw.Widget {
+        return .{ .userdata = @constCast(@ptrCast(self)), .drawFn = drawFn };
+    }
+    fn drawFn(ptr: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxfw.Surface {
+        const self: *const ScrollViewGuard = @ptrCast(@alignCast(ptr));
+        if (ctx.max.height == null or ctx.max.width == null) {
+            return vxfw.Surface.init(ctx.arena, self.inner.widget(), .{ .width = 0, .height = 0 });
+        }
+        return self.inner.draw(ctx);
     }
 };
 

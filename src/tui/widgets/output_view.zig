@@ -1,5 +1,5 @@
 /// OutputView — displays styled text lines (command output) with scroll support.
-/// This is a full-screen vxfw widget that reads from state.output.lines.
+/// Uses vxfw.ScrollView for automatic scroll management.
 const std = @import("std");
 const vaxis = @import("vaxis");
 const t = @import("../types.zig");
@@ -9,6 +9,7 @@ const vxfw = t.vxfw;
 state: *t.State,
 cfg: config.Config,
 pending_g: bool = false,
+scroll_view: vxfw.ScrollView = .{ .children = .{ .slice = &.{} } },
 
 const OutputView = @This();
 
@@ -22,81 +23,49 @@ pub fn widget(self: *OutputView) vxfw.Widget {
 
 fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
     const self: *OutputView = @ptrCast(@alignCast(userdata));
-    const state = self.state;
 
     switch (event) {
         .key_press => |key| {
-            // q or Escape → back to normal
-            if (key.codepoint == 'q' or key.codepoint == vaxis.Key.escape) {
+            // q or Escape → back to normal (intercept before ScrollView gets Esc)
+            if (key.matches('q', .{}) or key.matches(vaxis.Key.escape, .{})) {
                 self.pending_g = false;
-                state.mode = .normal;
-                state.output_scroll = 0;
-                return ctx.consumeAndRedraw();
-            }
-
-            // j / Down → scroll down 1
-            if (key.codepoint == 'j' or key.codepoint == vaxis.Key.down) {
-                self.pending_g = false;
-                const max = self.maxScroll();
-                if (state.output_scroll < max) state.output_scroll += 1;
-                return ctx.consumeAndRedraw();
-            }
-
-            // k / Up → scroll up 1
-            if (key.codepoint == 'k' or key.codepoint == vaxis.Key.up) {
-                self.pending_g = false;
-                if (state.output_scroll > 0) state.output_scroll -= 1;
+                self.state.mode = .normal;
+                // Reset scroll position for next time
+                self.scroll_view.scroll = .{};
                 return ctx.consumeAndRedraw();
             }
 
             // G → scroll to end
-            if (key.codepoint == 'G') {
+            if (key.matches('G', .{})) {
                 self.pending_g = false;
-                state.output_scroll = self.maxScroll();
+                _ = self.scroll_view.scroll.linesDown(255);
                 return ctx.consumeAndRedraw();
             }
 
-            // g (double tap) → scroll to top
-            if (key.codepoint == 'g') {
+            // gg → scroll to top
+            if (key.matches('g', .{})) {
                 if (self.pending_g) {
                     self.pending_g = false;
-                    state.output_scroll = 0;
+                    self.scroll_view.scroll = .{};
+                    return ctx.consumeAndRedraw();
                 } else {
                     self.pending_g = true;
+                    return ctx.consumeAndRedraw();
                 }
-                return ctx.consumeAndRedraw();
             }
 
-            // Ctrl-D → page down (half screen)
-            if (key.codepoint == 'd' and key.mods.ctrl) {
-                self.pending_g = false;
-                const half = last_height / 2;
-                const max = self.maxScroll();
-                state.output_scroll = @min(state.output_scroll + half, max);
-                return ctx.consumeAndRedraw();
-            }
+            // Reset pending_g on any other key
+            self.pending_g = false;
 
-            // Ctrl-U → page up (half screen)
-            if (key.codepoint == 'u' and key.mods.ctrl) {
-                self.pending_g = false;
-                const half = last_height / 2;
-                state.output_scroll -|= half;
-                return ctx.consumeAndRedraw();
-            }
+            // Forward j/k/Ctrl-D/Ctrl-U/arrows/mouse to ScrollView
+            return self.scroll_view.handleEvent(ctx, event);
+        },
+        .mouse => {
+            // Forward mouse events (wheel scroll) to ScrollView
+            return self.scroll_view.handleEvent(ctx, event);
         },
         else => {},
     }
-}
-
-/// Cached height from last draw, used for page up/down calculations.
-var last_height: usize = 24;
-
-fn maxScroll(self: *const OutputView) usize {
-    const total = self.state.output.lines.items.len;
-    // Reserve 2 lines for title bar + bottom hint
-    const visible = if (last_height > 2) last_height - 2 else 1;
-    if (total <= visible) return 0;
-    return total - visible;
 }
 
 fn lineStyleToVaxis(ls: t.LineStyle, cfg: config.Config) t.Style {
@@ -113,48 +82,42 @@ fn lineStyleToVaxis(ls: t.LineStyle, cfg: config.Config) t.Style {
 fn draw(userdata: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxfw.Surface {
     const self: *OutputView = @ptrCast(@alignCast(userdata));
     const state = self.state;
-    const width: u16 = ctx.max.width orelse 80;
-    const height: u16 = ctx.max.height orelse 24;
-    const h: usize = @intCast(height);
-
-    // Cache height for page up/down
-    last_height = h;
-
     const lines = state.output.lines.items;
 
-    // Layout: 1 line title, (height-2) content, 1 line hints
-    const content_h: usize = if (h > 2) h - 2 else 1;
-
-    // Build children array: title + content lines + hint bar
-    const visible_count = @min(content_h, if (lines.len > state.output_scroll) lines.len - state.output_scroll else 0);
-    const child_count = 1 + visible_count + 1; // title + lines + hint
-
-    const children = try ctx.arena.alloc(vxfw.FlexItem, child_count);
-
-    // ── Title bar ──
-    const title_text = if (state.output_title.len > 0) state.output_title else "Output";
-    const title_widget = try ctx.arena.create(vxfw.Text);
-    title_widget.* = .{ .text = title_text, .style = t.header_style };
-    children[0] = .{ .widget = title_widget.widget(), .flex = 0 };
-
-    // ── Content lines ──
-    for (0..visible_count) |i| {
-        const line = lines[state.output_scroll + i];
-        const style = lineStyleToVaxis(line.style, self.cfg);
-        const text_w = try ctx.arena.create(vxfw.Text);
-        text_w.* = .{ .text = if (line.text.len > 0) line.text else " ", .style = style };
-        children[1 + i] = .{ .widget = text_w.widget(), .flex = 0 };
+    // Build text widgets for each line on arena
+    const texts = try ctx.arena.alloc(vxfw.Text, lines.len);
+    const widgets = try ctx.arena.alloc(vxfw.Widget, lines.len);
+    for (lines, 0..) |line, i| {
+        texts[i] = .{
+            .text = if (line.text.len > 0) line.text else " ",
+            .style = lineStyleToVaxis(line.style, self.cfg),
+        };
+        widgets[i] = texts[i].widget();
     }
 
-    // ── Hint bar ──
-    const hint_w = try ctx.arena.create(vxfw.Text);
-    hint_w.* = .{ .text = " q:close  j/k:scroll  G:end  gg:top  ^D/^U:page", .style = t.dim_style };
-    children[child_count - 1] = .{ .widget = hint_w.widget(), .flex = 0 };
+    // Update scroll view children
+    self.scroll_view.children = .{ .slice = widgets };
+    self.scroll_view.item_count = @intCast(lines.len);
 
-    // Build FlexColumn
-    var col = vxfw.FlexColumn{ .children = children };
-    return col.widget().draw(ctx.withConstraints(
-        .{ .width = width, .height = height },
-        .{ .width = width, .height = height },
-    ));
+    // Build FlexColumn: title + scrollview + footer
+    const title_text_str = state.output_title orelse "Output";
+    const title_widget = try ctx.arena.create(vxfw.Text);
+    title_widget.* = .{ .text = title_text_str, .style = t.header_style };
+
+    const footer_widget = try ctx.arena.create(vxfw.Text);
+    footer_widget.* = .{ .text = " q:close  j/k:scroll  G:end  gg:top  ^D/^U:page", .style = t.dim_style };
+
+    const flex_children = try ctx.arena.alloc(vxfw.FlexItem, 3);
+    flex_children[0] = .{ .widget = title_widget.widget(), .flex = 0 };
+    const sv_guard = try ctx.arena.create(t.ScrollViewGuard);
+    sv_guard.* = .{ .inner = &self.scroll_view };
+    flex_children[1] = .{ .widget = sv_guard.widget(), .flex = 1 };
+    flex_children[2] = .{ .widget = footer_widget.widget(), .flex = 0 };
+
+    var col = vxfw.FlexColumn{ .children = flex_children };
+    var border = vxfw.Border{
+        .child = col.widget(),
+        .style = t.dim_style,
+    };
+    return border.widget().draw(ctx);
 }
