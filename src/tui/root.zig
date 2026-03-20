@@ -20,6 +20,7 @@ const PackPreview = @import("widgets/pack_preview.zig");
 const TagPicker = @import("widgets/tag_picker.zig");
 const WorkspacePicker = @import("widgets/workspace_picker.zig");
 const MainScreen = @import("widgets/main_screen.zig");
+const WorkflowRunnerWidget = @import("widgets/workflow_runner.zig");
 const vxfw = t.vxfw;
 
 /// Root widget that routes between modes. Currently renders a placeholder;
@@ -40,6 +41,7 @@ const ZipetRoot = struct {
     tag_picker: TagPicker,
     workspace_picker: WorkspacePicker,
     main_screen: MainScreen,
+    workflow_runner: WorkflowRunnerWidget,
 
     pub fn widget(self: *ZipetRoot) vxfw.Widget {
         return .{
@@ -96,7 +98,7 @@ const ZipetRoot = struct {
             .tag_picker => try self.tag_picker.widget().handleEvent(ctx, event),
             .workspace_picker => try self.workspace_picker.widget().handleEvent(ctx, event),
             .normal, .search, .command, .confirm_delete, .confirm_delete_multi, .info => try self.main_screen.widget().handleEvent(ctx, event),
-            .workflow_runner => {}, // handled by workflow runner widget (Task 13)
+            .workflow_runner => try self.workflow_runner.widget().handleEvent(ctx, event),
         }
 
         // Bridge: sync state.running → vxfw quit
@@ -192,7 +194,7 @@ const ZipetRoot = struct {
             .tag_picker => try self.tag_picker.widget().draw(ctx),
             .workspace_picker => try self.workspace_picker.widget().draw(ctx),
             .normal, .search, .command, .confirm_delete, .confirm_delete_multi, .info => try self.main_screen.widget().draw(ctx),
-            .workflow_runner => try self.main_screen.widget().draw(ctx), // placeholder until Task 13
+            .workflow_runner => try self.workflow_runner.widget().draw(ctx),
         };
 
         // If preview popup is active, composite it over the base
@@ -352,6 +354,7 @@ pub fn run(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.C
         .tag_picker = .{ .state = &state, .snip_store = snip_store, .hist = hist, .cfg = cfg, .allocator = allocator },
         .workspace_picker = .{ .state = &state, .snip_store = snip_store, .hist = hist, .cfg = cfg, .allocator = allocator },
         .main_screen = .{ .state = &state, .snip_store = snip_store, .cfg = cfg, .hist = hist, .allocator = allocator, .search_field = vxfw.TextField.init(allocator), .command_field = vxfw.TextField.init(allocator) },
+        .workflow_runner = .{ .state = &state, .cfg = cfg },
     };
     root.form_screen.initFields();
     defer root.form_screen.deinitFields();
