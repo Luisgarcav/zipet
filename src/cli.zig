@@ -1163,6 +1163,7 @@ fn cmdWorkflowShow(allocator: std.mem.Allocator, name: []const u8, snip_store: *
                 .stop => "stop",
                 .@"continue" => "continue",
                 .skip_rest => "skip_rest",
+                .ask => "ask",
             };
             printOut(allocator, "     on_fail: {s}\n", .{on_fail_str});
         }

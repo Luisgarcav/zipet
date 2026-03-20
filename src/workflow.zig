@@ -12,10 +12,12 @@ pub const OnFail = enum {
     stop,
     @"continue",
     skip_rest,
+    ask,
 
     pub fn fromString(s: []const u8) OnFail {
         if (std.mem.eql(u8, s, "continue")) return .@"continue";
         if (std.mem.eql(u8, s, "skip_rest")) return .skip_rest;
+        if (std.mem.eql(u8, s, "ask")) return .ask;
         return .stop;
     }
 };
@@ -29,6 +31,13 @@ pub const Step = struct {
     on_fail: OnFail,
     /// Fixed param overrides for this step (key=value pairs)
     param_overrides: []const ParamOverride,
+    // New fields:
+    capture: ?[]const u8 = null,
+    depends_on: []const []const u8 = &.{},
+    when: ?[]const u8 = null,
+    retry: u8 = 0,
+    retry_delay: u16 = 0,
+    confirm: bool = false,
 
     pub const ParamOverride = struct {
         key: []const u8,
@@ -130,7 +139,7 @@ pub fn executeSilent(
                     });
                     all_success = false;
                     switch (step.on_fail) {
-                        .stop, .skip_rest => break,
+                        .stop, .skip_rest, .ask => break,
                         .@"continue" => continue,
                     }
                 }
@@ -198,7 +207,7 @@ pub fn executeSilent(
 
         if (!step_success) {
             switch (step.on_fail) {
-                .stop, .skip_rest => break,
+                .stop, .skip_rest, .ask => break,
                 .@"continue" => {},
             }
         }
@@ -342,8 +351,7 @@ pub fn execute(
                     });
                     all_success = false;
                     switch (step.on_fail) {
-                        .stop => break,
-                        .skip_rest => break,
+                        .stop, .skip_rest, .ask => break,
                         .@"continue" => continue,
                     }
                 }
@@ -442,7 +450,8 @@ pub fn execute(
         // Handle failure policy
         if (!step_success) {
             switch (step.on_fail) {
-                .stop => {
+                .stop, .ask => {
+                    // .ask will be properly implemented in Task 7; for now behaves as .stop
                     printOut(allocator, "\x1b[31m⏹ Workflow stopped at step '{s}'\x1b[0m\n", .{step.name});
                     break;
                 },
@@ -798,6 +807,7 @@ pub fn saveWorkflow(allocator: std.mem.Allocator, wf: *const Workflow, cfg: conf
             .stop => "stop",
             .@"continue" => "continue",
             .skip_rest => "skip_rest",
+            .ask => "ask",
         };
         try writer.print("on_fail = \"{s}\"\n\n", .{on_fail_str});
     }
