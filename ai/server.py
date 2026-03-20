@@ -97,21 +97,33 @@ class ZipetBridge:
         self.bin = bin_path
         self.config_dir = Path(config_dir)
 
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """Remove ANSI escape sequences from text (fallback safety net)."""
+        import re
+        return re.sub(r'\x1b\[[0-9;]*m', '', text)
+
     def _run_cli(self, *args: str, timeout: int = 30) -> dict:
         """Ejecuta zipet CLI y captura resultado."""
         cmd = [self.bin] + list(args)
         logger.info(f"CLI call: {' '.join(cmd)}")
+
+        # Pass NO_COLOR=1 so zipet strips ANSI codes at the source
+        env = os.environ.copy()
+        env["NO_COLOR"] = "1"
+
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=env,
             )
             return {
                 "exit_code": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "stdout": self._strip_ansi(result.stdout),
+                "stderr": self._strip_ansi(result.stderr),
             }
         except subprocess.TimeoutExpired:
             return {"exit_code": -1, "stdout": "", "stderr": "Timeout"}

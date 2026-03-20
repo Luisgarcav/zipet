@@ -37,12 +37,24 @@ pub fn main() !void {
     defer hist.deinit();
     hist.load() catch {};
 
+    // Detect NO_COLOR environment / --no-color flag
+    cli.initNoColor(args);
+
+    // Filter out --no-color from args before dispatch
+    var filtered_args: std.ArrayList([]const u8) = .{};
+    defer filtered_args.deinit(gpa);
+    for (args[1..]) |arg| {
+        if (!std.mem.eql(u8, arg, "--no-color")) {
+            try filtered_args.append(gpa, arg);
+        }
+    }
+
     // Parse and dispatch CLI commands
-    if (args.len <= 1) {
+    if (filtered_args.items.len == 0) {
         // No arguments → open TUI
         try tui.run(gpa, &snip_store, cfg, &hist);
     } else {
-        try cli.dispatch(gpa, args[1..], &snip_store, cfg, &hist);
+        try cli.dispatch(gpa, filtered_args.items, &snip_store, cfg, &hist);
     }
 }
 
