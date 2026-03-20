@@ -68,6 +68,8 @@ evaluate(expr: []const u8, vars: VarContext) -> bool
 
 **Precedence:** `not` > `and` > `or`. No parentheses supported.
 
+Precedence example: `not {{a}} == 1 or {{b}} == 2` is parsed as `((not ({{a}} == 1)) or ({{b}} == 2))` — the `not` binds to the first comparison only.
+
 ### Evaluation Process
 
 1. Resolve template variables (`{{var}}` → value) using the current variable context.
@@ -103,7 +105,7 @@ topologicalSort(graph: Graph) -> []Step
 ### Behavior
 
 1. At workflow start, a DAG is built from step `depends_on` fields.
-2. Steps without explicit `depends_on` depend on the previous step (index - 1), maintaining backward compatibility.
+2. Steps without explicit `depends_on` depend on the previous step (index - 1), maintaining backward compatibility. This rule applies **always**, even when other steps in the workflow use explicit `depends_on`. Each step is evaluated independently: if it has `depends_on`, use it; if not, depend on index - 1. Step at index 0 with no `depends_on` has no dependencies.
 3. Cycles are detected before execution. If a cycle exists, the workflow fails with a descriptive error naming the offending step.
 
 ### Execution Order
@@ -145,6 +147,7 @@ Resolved order: build → test → package → deploy.
 - Between retries, the engine waits `retry_delay` seconds.
 - Interactive output shows: `⟳ Retry 2/3 for "build" (waiting 2s...)`
 - If all retries fail, `on_fail` is applied normally.
+- **Interaction with `on_fail = "ask"`:** Retries are exhausted first. Only after all retry attempts fail does the `ask` prompt appear. Retries are automatic recovery; `ask` is the manual fallback when automatic recovery is exhausted.
 - `{{prev_exit}}` and `{{prev_stdout}}` reflect the last attempt.
 
 ### Non-interactive
@@ -161,7 +164,7 @@ Retry works identically in non-interactive mode (no TTY dependency).
 
 ### Interaction with Retry
 
-If a step with `capture` is retried, the captured value reflects the last attempt (whether successful or not — capture happens on any execution, not only on success).
+If a step with `capture` is retried, capture only occurs on success (exit == 0). If all retries exhaust and the step ultimately fails, no capture occurs — the variable remains unset (empty). This prevents downstream steps from silently consuming garbage output from a failed step.
 
 ### Interaction with `when`
 
