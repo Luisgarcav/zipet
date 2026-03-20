@@ -40,6 +40,7 @@ pub const Mode = enum {
     pack_search,
     pack_preview,
     workflow_form,
+    workflow_runner,
 };
 
 // ── Text Field ──
@@ -360,6 +361,65 @@ pub const OutputBuf = struct {
     }
 };
 
+// ── Workflow event system ──
+pub const WorkflowEvent = union(enum) {
+    step_started: StepEventInfo,
+    step_completed: StepCompletedInfo,
+    step_failed: StepCompletedInfo,
+    step_skipped: StepSkippedInfo,
+    confirm_requested: StepEventInfo,
+    ask_requested: StepFailedAskInfo,
+    retry_started: RetryInfo,
+    workflow_done: WorkflowDoneInfo,
+    output_line: OutputLineInfo,
+
+    pub const StepEventInfo = struct {
+        name: []const u8,
+        index: usize,
+    };
+    pub const StepCompletedInfo = struct {
+        name: []const u8,
+        index: usize,
+        exit_code: u8,
+        duration_ms: u64,
+    };
+    pub const StepSkippedInfo = struct {
+        name: []const u8,
+        index: usize,
+        reason: []const u8,
+    };
+    pub const StepFailedAskInfo = struct {
+        name: []const u8,
+        index: usize,
+        exit_code: u8,
+    };
+    pub const RetryInfo = struct {
+        name: []const u8,
+        index: usize,
+        attempt: u8,
+        max_attempts: u8,
+    };
+    pub const WorkflowDoneInfo = struct {
+        success: bool,
+    };
+    pub const OutputLineInfo = struct {
+        text: []const u8,
+        is_stderr: bool,
+    };
+};
+
+pub const WorkflowRunnerState = struct {
+    workflow_name: []const u8 = "",
+    total_steps: usize = 0,
+    events: std.ArrayListUnmanaged(WorkflowEvent) = .{},
+    user_response: ?u8 = null,
+    is_running: bool = false,
+
+    pub fn deinit(self: *WorkflowRunnerState, alloc: std.mem.Allocator) void {
+        self.events.deinit(alloc);
+    }
+};
+
 // ── Main state ──
 pub const State = struct {
     mode: Mode = .normal,
@@ -411,6 +471,9 @@ pub const State = struct {
     pack_preview_scroll: usize = 0,
     pack_preview_name: []const u8 = "",
     pack_preview_installed: bool = false,
+
+    // Workflow runner sub-state
+    wf_runner: WorkflowRunnerState = .{},
 
     pub fn initSelectedSet(self: *State, allocator: std.mem.Allocator) void {
         if (!self.selected_set_inited) {

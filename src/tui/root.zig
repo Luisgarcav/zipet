@@ -96,6 +96,7 @@ const ZipetRoot = struct {
             .tag_picker => try self.tag_picker.widget().handleEvent(ctx, event),
             .workspace_picker => try self.workspace_picker.widget().handleEvent(ctx, event),
             .normal, .search, .command, .confirm_delete, .confirm_delete_multi, .info => try self.main_screen.widget().handleEvent(ctx, event),
+            .workflow_runner => {}, // handled by workflow runner widget (Task 13)
         }
 
         // Bridge: sync state.running → vxfw quit
@@ -191,6 +192,7 @@ const ZipetRoot = struct {
             .tag_picker => try self.tag_picker.widget().draw(ctx),
             .workspace_picker => try self.workspace_picker.widget().draw(ctx),
             .normal, .search, .command, .confirm_delete, .confirm_delete_multi, .info => try self.main_screen.widget().draw(ctx),
+            .workflow_runner => try self.main_screen.widget().draw(ctx), // placeholder until Task 13
         };
 
         // If preview popup is active, composite it over the base
