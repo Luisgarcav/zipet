@@ -117,6 +117,15 @@ pub fn executeSilent(
     var all_success = true;
     var prev_stdout_owned = false;
 
+    var var_ctx = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var vit = var_ctx.iterator();
+        while (vit.next()) |entry| {
+            allocator.free(entry.value_ptr.*);
+        }
+        var_ctx.deinit();
+    }
+
     defer {
         if (prev_stdout_owned) allocator.free(prev_stdout);
     }
@@ -157,7 +166,8 @@ pub fn executeSilent(
 
         const extra_count: usize = 2;
         const override_count = step.param_overrides.len;
-        const total_k = param_keys.len + extra_count + override_count;
+        const var_ctx_count = var_ctx.count();
+        const total_k = param_keys.len + extra_count + override_count + var_ctx_count;
 
         var all_keys = try allocator.alloc([]const u8, total_k);
         defer allocator.free(all_keys);
@@ -165,7 +175,8 @@ pub fn executeSilent(
         defer {
             allocator.free(all_vals[param_keys.len]);
             allocator.free(all_vals[param_keys.len + 1]);
-            for (param_keys.len + extra_count..total_k) |oi| allocator.free(all_vals[oi]);
+            for (param_keys.len + extra_count..param_keys.len + extra_count + override_count) |oi| allocator.free(all_vals[oi]);
+            // var_ctx values are NOT owned here — they're borrowed from var_ctx
             allocator.free(all_vals);
         }
 
@@ -184,6 +195,14 @@ pub fn executeSilent(
             all_vals[param_keys.len + extra_count + oi] = try allocator.dupe(u8, ov.value);
         }
 
+        var var_idx: usize = 0;
+        var ctx_iter = var_ctx.iterator();
+        while (ctx_iter.next()) |entry| {
+            all_keys[param_keys.len + extra_count + override_count + var_idx] = entry.key_ptr.*;
+            all_vals[param_keys.len + extra_count + override_count + var_idx] = entry.value_ptr.*;
+            var_idx += 1;
+        }
+
         const rendered = try template.render(allocator, raw_cmd, all_keys, all_vals);
         defer allocator.free(rendered);
 
@@ -196,6 +215,17 @@ pub fn executeSilent(
         prev_stdout = try allocator.dupe(u8, std.mem.trim(u8, result.stdout, "\n\r"));
         prev_stdout_owned = true;
         prev_exit = result.exit_code;
+
+        if (step.capture) |cap_name| {
+            if (result.exit_code == 0) {
+                const trimmed = std.mem.trim(u8, result.stdout, "\n\r \t");
+                const owned = try allocator.dupe(u8, trimmed);
+                if (var_ctx.fetchRemove(cap_name)) |old| {
+                    allocator.free(old.value);
+                }
+                try var_ctx.put(cap_name, owned);
+            }
+        }
 
         try step_results.append(allocator, .{
             .step_name = step.name,
@@ -322,6 +352,15 @@ pub fn execute(
     var all_success = true;
     var prev_stdout_owned = false;
 
+    var var_ctx = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var vit = var_ctx.iterator();
+        while (vit.next()) |entry| {
+            allocator.free(entry.value_ptr.*);
+        }
+        var_ctx.deinit();
+    }
+
     defer {
         if (prev_stdout_owned) allocator.free(prev_stdout);
     }
@@ -368,10 +407,11 @@ pub fn execute(
             }
         };
 
-        // Build extended keys/values: workflow params + prev_stdout + prev_exit + step overrides
+        // Build extended keys/values: workflow params + prev_stdout + prev_exit + step overrides + var_ctx
         const extra_count: usize = 2; // prev_stdout, prev_exit
         const override_count = step.param_overrides.len;
-        const total_keys = workflow.params.len + extra_count + override_count;
+        const var_ctx_count = var_ctx.count();
+        const total_keys = workflow.params.len + extra_count + override_count + var_ctx_count;
 
         var all_keys = try allocator.alloc([]const u8, total_keys);
         defer allocator.free(all_keys);
@@ -383,9 +423,10 @@ pub fn execute(
             // prev_exit value
             allocator.free(all_values[workflow.params.len + 1]);
             // override values
-            for (workflow.params.len + extra_count..total_keys) |oi| {
+            for (workflow.params.len + extra_count..workflow.params.len + extra_count + override_count) |oi| {
                 allocator.free(all_values[oi]);
             }
+            // var_ctx values are NOT owned here — they're borrowed from var_ctx
             allocator.free(all_values);
         }
 
@@ -405,6 +446,15 @@ pub fn execute(
         for (step.param_overrides, 0..) |ov, oi| {
             all_keys[workflow.params.len + extra_count + oi] = ov.key;
             all_values[workflow.params.len + extra_count + oi] = try allocator.dupe(u8, ov.value);
+        }
+
+        // Add var_ctx entries (borrowed from var_ctx)
+        var var_idx: usize = 0;
+        var ctx_iter = var_ctx.iterator();
+        while (ctx_iter.next()) |entry| {
+            all_keys[workflow.params.len + extra_count + override_count + var_idx] = entry.key_ptr.*;
+            all_values[workflow.params.len + extra_count + override_count + var_idx] = entry.value_ptr.*;
+            var_idx += 1;
         }
 
         // Render the command
@@ -438,6 +488,17 @@ pub fn execute(
         prev_stdout = try allocator.dupe(u8, std.mem.trim(u8, result.stdout, "\n\r"));
         prev_stdout_owned = true;
         prev_exit = result.exit_code;
+
+        if (step.capture) |cap_name| {
+            if (result.exit_code == 0) {
+                const trimmed = std.mem.trim(u8, result.stdout, "\n\r \t");
+                const owned = try allocator.dupe(u8, trimmed);
+                if (var_ctx.fetchRemove(cap_name)) |old| {
+                    allocator.free(old.value);
+                }
+                try var_ctx.put(cap_name, owned);
+            }
+        }
 
         try step_results.append(allocator, .{
             .step_name = step.name,
