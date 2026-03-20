@@ -1500,6 +1500,84 @@ pub fn freeParallelWorkflowResults(allocator: std.mem.Allocator, results: []Para
     allocator.free(results);
 }
 
+/// Display what a workflow would do without executing.
+pub fn executeDryRun(
+    allocator: std.mem.Allocator,
+    wf: *const Workflow,
+    snip_store: *store.Store,
+) !void {
+    // Build DAG and get execution order
+    var dag_nodes = try allocator.alloc(dag.Node, wf.steps.len);
+    defer allocator.free(dag_nodes);
+    for (wf.steps, 0..) |step, i| {
+        dag_nodes[i] = .{ .name = step.name, .index = i, .depends_on = step.depends_on };
+    }
+
+    const exec_order = dag.topologicalSort(allocator, dag_nodes) catch |err| {
+        if (err == dag.GraphError.CycleDetected) {
+            printOut(allocator, "\x1b[31m✗ Workflow has circular dependencies\x1b[0m\n", .{});
+            return;
+        } else if (err == dag.GraphError.UnknownDependency) {
+            printOut(allocator, "\x1b[31m✗ Unknown step in depends_on\x1b[0m\n", .{});
+            return;
+        } else {
+            return err;
+        }
+    };
+    defer allocator.free(exec_order);
+
+    printOut(allocator, "\n\x1b[1;36m━━━ Dry Run: {s} ({d} steps) ━━━\x1b[0m\n\n", .{ wf.name, wf.steps.len });
+
+    for (exec_order, 0..) |step_idx, display_num| {
+        const step = wf.steps[step_idx];
+        printOut(allocator, "\x1b[1m[dry] Step {d}: \"{s}\"\x1b[0m\n", .{ display_num + 1, step.name });
+
+        // Show command
+        if (step.cmd) |cmd| {
+            printOut(allocator, "      cmd: {s}\n", .{cmd});
+        } else if (step.snippet_ref) |ref| {
+            const snip = findSnippet(snip_store, ref);
+            if (snip) |s| {
+                printOut(allocator, "      snippet: {s} -> {s}\n", .{ ref, s.cmd });
+            } else {
+                printOut(allocator, "      snippet: {s} (not found!)\n", .{ref});
+            }
+        }
+
+        // Show on_fail
+        const on_fail_str: []const u8 = switch (step.on_fail) {
+            .stop => "stop",
+            .@"continue" => "continue",
+            .skip_rest => "skip_rest",
+            .ask => "ask",
+        };
+        printOut(allocator, "      on_fail: {s}\n", .{on_fail_str});
+
+        // Show new fields if set
+        if (step.retry > 0) {
+            printOut(allocator, "      retry: {d} (delay: {d}s)\n", .{ step.retry, step.retry_delay });
+        }
+        if (step.when) |w| {
+            printOut(allocator, "      when: {s} -> (not evaluated)\n", .{w});
+        }
+        if (step.depends_on.len > 0) {
+            printOut(allocator, "      depends_on: [", .{});
+            for (step.depends_on, 0..) |dep, di| {
+                if (di > 0) printOut(allocator, ", ", .{});
+                printOut(allocator, "{s}", .{dep});
+            }
+            printOut(allocator, "]\n", .{});
+        }
+        if (step.capture) |cap| {
+            printOut(allocator, "      capture: {{{{{s}}}}} (pending)\n", .{cap});
+        }
+        if (step.confirm) {
+            printOut(allocator, "      confirm: true\n", .{});
+        }
+        writeOut("\n");
+    }
+}
+
 test "workflow basic" {
     // Placeholder test
     const gpa = std.testing.allocator;

@@ -11,8 +11,49 @@ const community = @import("community.zig");
 const workspace_mod = @import("workspace.zig");
 const update = @import("update.zig");
 
+/// Respects NO_COLOR (https://no-color.org/) and --no-color flag.
+var no_color: bool = false;
+
+pub fn initNoColor(args: []const []const u8) void {
+    if (std.posix.getenv("NO_COLOR") != null) {
+        no_color = true;
+        return;
+    }
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--no-color")) {
+            no_color = true;
+            return;
+        }
+    }
+}
+
+/// Writes data to stdout, stripping ANSI escape sequences if NO_COLOR is set.
 fn writeOut(data: []const u8) void {
-    std.fs.File.stdout().writeAll(data) catch {};
+    if (!no_color) {
+        std.fs.File.stdout().writeAll(data) catch {};
+        return;
+    }
+    // Strip ANSI escape sequences: \x1b[ ... m
+    var i: usize = 0;
+    var start: usize = 0;
+    while (i < data.len) {
+        if (data[i] == 0x1b and i + 1 < data.len and data[i + 1] == '[') {
+            // Flush text before the escape
+            if (i > start) {
+                std.fs.File.stdout().writeAll(data[start..i]) catch {};
+            }
+            // Skip until 'm' (end of SGR sequence)
+            i += 2;
+            while (i < data.len and data[i] != 'm') : (i += 1) {}
+            if (i < data.len) i += 1; // skip the 'm'
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    if (start < data.len) {
+        std.fs.File.stdout().writeAll(data[start..]) catch {};
+    }
 }
 
 fn writeErr(data: []const u8) void {
@@ -890,7 +931,15 @@ fn cmdWorkflow(allocator: std.mem.Allocator, args: []const []const u8, snip_stor
             writeOut("Usage: zipet workflow run <name>\n");
             return;
         }
-        try cmdWorkflowRun(allocator, args[1], snip_store, cfg);
+        var dry_run = false;
+        const remaining_args = args[2..];
+        for (remaining_args) |arg| {
+            if (std.mem.eql(u8, arg, "--dry")) {
+                dry_run = true;
+                break;
+            }
+        }
+        try cmdWorkflowRun(allocator, args[1], snip_store, cfg, dry_run);
     } else if (std.mem.eql(u8, sub, "ls")) {
         cmdWorkflowList(allocator, snip_store);
     } else if (std.mem.eql(u8, sub, "show")) {
@@ -1113,8 +1162,12 @@ fn cmdWorkflowAdd(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: c
     printOut(allocator, "\n\x1b[32m✓ Workflow '{s}' saved with {d} steps\x1b[0m\n", .{ name, owned_steps.len });
 }
 
-fn cmdWorkflowRun(allocator: std.mem.Allocator, name: []const u8, snip_store: *store.Store, cfg: config.Config) !void {
+fn cmdWorkflowRun(allocator: std.mem.Allocator, name: []const u8, snip_store: *store.Store, cfg: config.Config, dry_run: bool) !void {
     if (workflow.getWorkflow(allocator, name)) |wf| {
+        if (dry_run) {
+            try workflow.executeDryRun(allocator, wf, snip_store);
+            return;
+        }
         const result = try workflow.execute(allocator, wf, snip_store, cfg);
         defer result.deinit();
     } else {
