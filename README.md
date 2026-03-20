@@ -2,17 +2,35 @@
   <img src="assets/logo.png" alt="zipet logo" width="280" />
 </p>
 
-<p align="center"><strong>Snippets that grow with you</strong></p>
-<p align="center">
-  A blazing-fast command snippet manager with TUI, workflows, packs, and fuzzy search — written in Zig.
-</p>
+<h3 align="center">Your commands start as one-liners.<br/>They shouldn't stay that way.</h3>
 
 <p align="center">
   <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-cyan?style=flat-square" />
   <img alt="Zig" src="https://img.shields.io/badge/zig-0.15.1-orange?style=flat-square&logo=zig" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square" />
-  <img alt="Platform" src="https://img.shields.io/badge/platform-linux-blue?style=flat-square" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-blue?style=flat-square" />
 </p>
+
+---
+
+## The idea
+
+Every useful command you've ever written followed the same path: you typed it once, it worked, and then it disappeared into your history. Maybe you saved it in a text file. Maybe you didn't.
+
+zipet gives that command a life:
+
+```
+  Save it          →  zipet add "docker build -t {{image}}:{{tag}} ."
+  Parameterize it  →  {{image}} and {{tag}} are prompted at runtime
+  Chain it         →  build → test → deploy as a workflow
+  Run them all     →  zipet parallel build-api build-web run-tests
+  Share it         →  zipet pack create my-toolkit
+  Expose it to AI  →  your agent calls zipet via MCP
+```
+
+That's the progression. You start by saving a command. You end with a portable, shareable automation layer that works from the terminal, a TUI, or an AI agent — all from the same TOML files, in a single static binary with zero dependencies.
+
+The last step matters more than it looks. zipet includes an MCP server so AI coding agents use your verified, tested commands instead of hallucinating new ones. Your snippet library becomes a semantic firewall between what an agent *wants* to run and what you've *approved* to run.
 
 ---
 
@@ -22,9 +40,9 @@
 curl -sSL https://raw.githubusercontent.com/Luisgarcav/zipet/main/scripts/install.sh | bash
 ```
 
-That's it. The script detects your OS and architecture, downloads the right binary, and places it in `~/.local/bin/`.
+The script detects your OS and architecture, downloads the right binary, and places it in `~/.local/bin/`. That's it.
 
-> Supports **Linux** (x86_64) and **macOS** (x86_64 / Apple Silicon).
+> Supports **Linux** (x86_64 / aarch64), **macOS** (x86_64 / Apple Silicon), and **Windows** (x86_64 / aarch64).
 
 ---
 
@@ -34,61 +52,93 @@ That's it. The script detects your OS and architecture, downloads the right bina
 zipet update
 ```
 
-That's it. zipet checks GitHub for the latest release, compares versions, and replaces itself automatically.
+zipet checks GitHub for the latest release, compares versions, and replaces itself automatically.
 
 ```bash
-# Force update even if local version is newer
-zipet update --force
+zipet update --force   # force update even if local version is newer
 ```
-
-> You can also reinstall from scratch: `curl -sSL https://raw.githubusercontent.com/Luisgarcav/zipet/main/scripts/install.sh | bash`
-
----
-
-## ✨ Why zipet?
-
-You type the same commands over and over. You forget that perfect `find` incantation. Your `~/.bash_history` is a graveyard of useful one-liners you'll never find again.
-
-**zipet** saves, organizes, and executes your commands — with parameters, workflows, fuzzy search, and a beautiful TUI. All stored as simple TOML files. Zero dependencies at runtime.
 
 ---
 
 ## 🎬 Quick Start
 
 ```bash
-# Initialize zipet (creates ~/.config/zipet with examples)
+# Initialize (creates ~/.config/zipet with example snippets)
 zipet init
 
-# Add your first snippet
+# Save a command
 zipet add "docker build -t {{image}}:{{tag}} ."
 
-# Run it with fuzzy search
+# Find and run it
 zipet run docker
 
-# Or just open the TUI
+# Or open the TUI and browse everything
 zipet
 ```
 
 ---
 
-## 🚀 Features
+## Start simple
 
-### 🔍 Fuzzy Search
+You saved a command. Now find it and run it.
 
-Find any snippet instantly. zipet uses an intelligent scoring algorithm with bonuses for word boundaries, camelCase, consecutive matches, and exact prefixes.
+zipet uses fuzzy search with scoring for word boundaries, camelCase, consecutive matches, and exact prefixes. You don't need to remember the full name — just enough to narrow it down:
 
 ```bash
 zipet run dk        # matches "docker-build", "disk-usage", etc.
 zipet run "find lg" # matches "find-large"
+zipet docker        # unknown commands are treated as implicit "run"
 ```
 
-Unknown commands are treated as implicit `run` — just type `zipet docker` and go.
+Or skip the CLI entirely and browse everything in the TUI:
+
+<p align="center">
+  <img src="assets/tui-screenshot.png" alt="zipet TUI screenshot" width="720" />
+</p>
+
+Launch it with just `zipet`. Vim-native keybindings, powered by [libvaxis](https://github.com/rockorager/libvaxis):
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Navigate up / down |
+| `gg` / `G` | Jump to first / last |
+| `/` | Focus search bar |
+| `Enter` | Run selected snippet |
+| `a` | Add new snippet |
+| `e` | Edit in `$EDITOR` |
+| `d` | Delete (with confirmation) |
+| `y` | Yank command to clipboard |
+| `Space` | Toggle preview pane |
+| `t` | Filter by tag |
+| `?` | Toggle help sidebar |
+| `:q` | Quit |
+
+<details>
+<summary>All TUI keybindings</summary>
+
+| Key | Action |
+|-----|--------|
+| `Ctrl-D` / `Ctrl-U` | Page down / up |
+| `w` | Create new workflow (inline wizard) |
+| `p` | Paste from clipboard |
+| `o` | Open TOML file in editor |
+| `i` | Full info panel |
+| `W` | Workspace picker |
+| `P` | Pack browser |
+| `:w` | Save all |
+| `:wq` | Save & quit |
+| `:tags` | Tag picker |
+| `:export` | Export snippets |
+| `:ws` | Workspace picker |
+| `:packs` | Pack browser |
+
+</details>
 
 ---
 
-### 📝 Smart Templates with `{{params}}`
+## Parametrize
 
-Snippets support parameterized placeholders that are prompted at execution time:
+A saved command becomes useful when it adapts. Add `{{placeholders}}` and zipet prompts for values at runtime:
 
 ```toml
 [snippets.find-large]
@@ -101,16 +151,15 @@ path = { prompt = "Search path", default = "." }
 size = { prompt = "Minimum size", default = "100M" }
 ```
 
-**Parameter types:**
+Parameters can be simple text, a predefined list, or dynamically generated:
+
 | Type | Description |
 |------|-------------|
-| `prompt` + `default` | Simple text input with default value |
-| `options` | Predefined list — user picks from numbered menu |
-| `command` | Dynamic options — runs a shell command to populate choices |
+| `prompt` + `default` | Text input with a default value |
+| `options` | Pick from a numbered list |
+| `command` | Runs a shell command to populate choices (e.g. `git branch`) |
 
-#### 🧠 Built-in Variables
-
-Use these anywhere in your commands — they resolve automatically:
+There are also built-in variables that resolve automatically — no prompts needed:
 
 | Variable | Value |
 |---|---|
@@ -129,200 +178,59 @@ Use these anywhere in your commands — they resolve automatically:
 
 ---
 
-### 🖥️ Terminal UI (TUI)
+## Chain
 
-Launch with just `zipet` — a vim-native interface powered by [libvaxis](https://github.com/rockorager/libvaxis):
-
-<p align="center">
-  <img src="assets/tui-screenshot.png" alt="zipet TUI screenshot" width="720" />
-</p>
-
-**Keybindings:**
-
-| Key | Action |
-|-----|--------|
-| `j` / `k` | Navigate up / down |
-| `gg` / `G` | Jump to first / last |
-| `Ctrl-D` / `Ctrl-U` | Page down / up |
-| `/` | Focus search bar |
-| `Enter` | Run selected snippet |
-| `a` | Add new snippet (inline form) |
-| `w` | Create new workflow (inline wizard) |
-| `e` | Edit snippet in `$EDITOR` |
-| `d` | Delete (with confirmation) |
-| `y` | Yank command to clipboard |
-| `p` | Paste from clipboard |
-| `o` | Open TOML file in editor |
-| `i` | Full info panel |
-| `Space` | Toggle preview pane |
-| `t` | Filter by tag |
-| `W` | Workspace picker |
-| `P` | Pack browser |
-| `?` | Toggle help sidebar |
-| `:q` | Quit |
-| `:w` | Save all |
-| `:wq` | Save & quit |
-| `:tags` | Tag picker |
-| `:export` | Export snippets |
-| `:ws` | Workspace picker |
-| `:packs` | Pack browser |
-
----
-
-### ⚡ Workflows
-
-Chain multiple commands and snippets into sequential pipelines with error handling and data passing between steps:
+One parameterized command is useful. Several of them in sequence is a deployment pipeline. Workflows let you chain snippets and commands with error handling and data passing between steps:
 
 ```bash
-# Create a workflow interactively
-zipet workflow add
-
-# Run it
+zipet workflow add       # interactive wizard
 zipet workflow run deploy-all
-
-# List all workflows
-zipet wf ls
-
-# Inspect workflow details
-zipet wf show deploy-all
+zipet wf ls              # list all workflows
+zipet wf show deploy-all # inspect steps
 ```
 
-**Workflow features:**
-- 🔗 **Step chaining** — inline commands or snippet references
-- 🔄 **Inter-step data** — `{{prev_stdout}}` and `{{prev_exit}}` pass data between steps
-- 🛡️ **Failure policies** — `stop`, `continue`, or `skip_rest` per step
-- 📝 **Workflow-level params** — shared parameters prompted once for all steps
-- ✏️ **Edit in `$EDITOR`** — `zipet wf edit <name>`
+What makes workflows more than a shell script:
 
----
+- **Snippet references** — reuse existing snippets as steps, don't duplicate commands
+- **Inter-step data** — `{{prev_stdout}}` and `{{prev_exit}}` pass output between steps
+- **Failure policies** — each step decides what happens on error: `stop`, `continue`, or `skip_rest`
+- **Shared params** — prompted once, available to every step
+- **Editable** — `zipet wf edit <name>` opens the TOML in your `$EDITOR`
 
-### 🔀 Parallel Execution
-
-Run multiple snippets or workflows simultaneously with threaded execution:
+When steps don't depend on each other, run them all at once:
 
 ```bash
-# Run three health checks in parallel
 zipet parallel check-disk check-mem check-net
-
-# Short alias with param overrides
 zipet par deploy-api deploy-web -- env=prod
-
-# Mix snippets and workflows
 zipet par build-frontend build-backend run-tests
 ```
 
-Each parallel item runs in its own thread. Results show exit codes, duration, stdout/stderr for each.
+Each item runs in its own thread. Results show exit codes, duration, and stdout/stderr per item.
 
 ---
 
-### 📦 Packs
+## Organize
 
-<p align="center">
-  <img src="assets/packs-screenshot.png" alt="zipet Pack Browser" width="720" />
-</p>
-
-Shareable collections of snippets and workflows. Install from built-in registry, local files, or URLs:
+As your collection grows, you need structure. Tags let you filter instantly:
 
 ```bash
-# Browse available packs
-zipet pack ls
-
-# Install a built-in pack
-zipet pack install pentesting
-zipet pack install devops
-
-# Install into a specific workspace
-zipet pack install web-dev --workspace=myproject
-
-# Install from file or URL
-zipet pack install ./my-snippets.toml
-zipet pack install https://example.com/pack.toml
-
-# Create a pack from your snippets
-zipet pack create my-tools --namespace=general
-
-# View pack details
-zipet pack info pentesting
-
-# Remove a pack
-zipet pack uninstall devops
+zipet tags             # list all tags with counts
+zipet ls --tags=docker # filter by tag
+                       # in the TUI: press 't' for the tag picker
 ```
 
-**Built-in packs:**
-
-| Pack | Description |
-|------|-------------|
-| `pentesting` | Nmap, gobuster, sqlmap, hydra, hashcat... |
-| `devops` | Docker, Kubernetes, deployment, monitoring |
-| `git-power` | Advanced Git workflows and shortcuts |
-| `sysadmin` | Linux system administration essentials |
-| `web-dev` | HTTP testing, API debugging, JWT, encoding |
-
-#### 🌐 Community Packs
-
-Share and discover packs created by other users through the [community registry](https://github.com/Luisgarcav/zipet-community-packs):
+Workspaces go further — isolated snippet collections per project, context, or environment:
 
 ```bash
-# Search community packs
-zipet pack search docker
-
-# Browse all community packs
-zipet pack browse
-
-# Install a community pack
-zipet pack install community/docker-toolkit
-
-# Install into a workspace
-zipet pack install community/docker-toolkit --workspace=myproject
-```
-
-**Publishing your own pack:**
-
-```bash
-# 1. Create your pack
-zipet pack create my-awesome-pack --namespace=general
-
-# 2. Validate and get publishing instructions
-zipet pack publish my-awesome-pack.toml
-
-# 3. Follow the instructions to submit via PR or GitHub Issue
-```
-
-The `publish` command validates your pack, shows its contents, and gives you step-by-step instructions to submit it to the community registry. See the [community repo](https://github.com/Luisgarcav/zipet-community-packs) for guidelines.
-
----
-
-### 📂 Workspaces
-
-Organize snippets by project, context, or environment. Each workspace has isolated snippets and workflows:
-
-```bash
-# Create a workspace (optionally linked to a project directory)
 zipet workspace create backend --path=/home/user/projects/api
-
-# Switch to it
-zipet ws use backend
-
-# See which workspace is active
-zipet ws current
-
-# List all workspaces
-zipet ws ls
-
-# Switch back to global
-zipet ws use --global
-
-# Delete a workspace
-zipet ws rm backend
+zipet ws use backend      # switch to it
+zipet ws current          # see which workspace is active
+zipet ws use --global     # switch back to global
 ```
 
-Workspaces are also accessible from the TUI with `W` or `:ws`.
+When a workspace is linked to a directory, zipet auto-activates it when you `cd` into that project. Workspace snippets merge with your global ones. Also accessible from the TUI with `W` or `:ws`.
 
----
-
-### 🐚 Shell Integration
-
-Bind zipet to keyboard shortcuts in your shell:
+Integrate zipet directly into your shell for instant access:
 
 ```bash
 # Bash — add to ~/.bashrc
@@ -342,9 +250,66 @@ zipet shell fish | source
 
 ---
 
-### 🤖 AI Agent Integration (MCP)
+## Share
 
-zipet includes a **Model Context Protocol (MCP) server** so AI coding agents (Claude, Copilot, Cursor, etc.) can search, preview, and execute your snippets securely.
+You've built a useful collection. Now package it for your team — or for everyone.
+
+<p align="center">
+  <img src="assets/packs-screenshot.png" alt="zipet Pack Browser" width="720" />
+</p>
+
+Packs are shareable bundles of snippets and workflows. Install from the built-in registry, local files, URLs, or the community:
+
+```bash
+zipet pack install pentesting              # built-in pack
+zipet pack install ./my-snippets.toml      # local file
+zipet pack install https://example.com/pack.toml  # URL
+zipet pack install community/docker-toolkit       # community registry
+zipet pack install web-dev --workspace=myproject   # into a workspace
+```
+
+**Built-in packs:**
+
+| Pack | Description |
+|------|-------------|
+| `pentesting` | Nmap, gobuster, sqlmap, hydra, hashcat... |
+| `devops` | Docker, Kubernetes, deployment, monitoring |
+| `git-power` | Advanced Git workflows and shortcuts |
+| `sysadmin` | Linux system administration essentials |
+| `web-dev` | HTTP testing, API debugging, JWT, encoding |
+
+Create your own pack from existing snippets and publish it:
+
+```bash
+zipet pack create my-toolkit --namespace=general
+zipet pack publish my-toolkit.toml
+```
+
+The `publish` command validates your pack and gives you step-by-step instructions to submit it to the [community registry](https://github.com/Luisgarcav/zipet-community-packs) via PR or GitHub Issue.
+
+```bash
+zipet pack search docker     # search community packs
+zipet pack browse            # browse everything available
+```
+
+Import and export also work for quick sharing without packs:
+
+```bash
+zipet export > my-snippets.toml           # export as TOML
+zipet export --json > my-snippets.json    # or JSON
+zipet import ./shared-snippets.toml       # import from file
+zipet import https://example.com/team.toml # or URL
+```
+
+---
+
+## Automate
+
+This is what makes zipet different from every other snippet manager.
+
+When an AI agent needs to run a command, it has two options: hallucinate one from its training data, or use one you've already written, tested, and approved. zipet's built-in [MCP](https://modelcontextprotocol.io/) server gives it the second option.
+
+Your snippet library becomes a **semantic firewall** — the agent searches your verified commands, previews them with real parameters, and executes only what you've explicitly allowed. No invented flags, no wrong paths, no `rm -rf` surprises.
 
 ```
 ┌──────────────────────┐
@@ -353,31 +318,40 @@ zipet includes a **Model Context Protocol (MCP) server** so AI coding agents (Cl
            │ MCP Protocol (stdio/SSE)
            ▼
 ┌──────────────────────┐
-│  zipet-mcp-server    │  search → preview → run (with safety gate)
+│  zipet-mcp-server    │  search → preview → execute (with safety gate)
 └──────────┬───────────┘
-           │ subprocess
+           │ runs only verified snippets
            ▼
 ┌──────────────────────┐
-│     zipet CLI        │  ~/.config/zipet/
+│     zipet CLI        │  your curated command library
 └──────────────────────┘
 ```
 
-**Available MCP tools:**
+The agent gets access to the same things you use — snippets, workflows, packs, workspaces — through a set of MCP tools:
 
-| Tool | Description |
-|------|-------------|
-| `zipet_search` | Fuzzy search snippets and workflows |
-| `zipet_list` | List by category or tags |
-| `zipet_get` | Get full snippet details |
-| `zipet_run` | Execute a snippet (with safety gate) |
-| `zipet_run_workflow` | Execute a full workflow |
-| `zipet_preview` | Preview expanded command without executing |
-| `zipet_packs` | Browse and install packs |
-| `zipet_workspaces` | Manage workspaces |
+| Tool | What the agent can do |
+|------|----------------------|
+| `zipet_search` | Find snippets by intent (fuzzy matched) |
+| `zipet_preview` | See the expanded command before running it |
+| `zipet_run` | Execute — gated by your safety policy |
+| `zipet_run_workflow` | Run multi-step workflows |
+| `zipet_list` | Browse by category or tags |
+| `zipet_get` | Read full snippet details and params |
+| `zipet_packs` | Install curated packs |
+| `zipet_workspaces` | Switch context |
 
-**MCP resources** — `zipet://snippets`, `zipet://workflows`, `zipet://packs`, `zipet://config`
+**Resources:** `zipet://snippets`, `zipet://workflows`, `zipet://packs`, `zipet://config`
 
-**Setup** — add to your agent's MCP config:
+You control what the agent is allowed to do:
+
+| Safety mode | Behavior |
+|-------------|----------|
+| `confirm` | Agent proposes, you approve — **recommended** |
+| `allowlist` | Only runs snippets/tags you've explicitly allowed |
+| `dry-run` | Preview only, never executes |
+| `open` | Execute without confirmation (dev/sandbox only) |
+
+Add to your agent's MCP config:
 
 ```json
 {
@@ -394,52 +368,7 @@ zipet includes a **Model Context Protocol (MCP) server** so AI coding agents (Cl
 }
 ```
 
-**Safety modes:**
-
-| Mode | Description |
-|------|-------------|
-| `open` | Execute without confirmation (dev/sandbox only) |
-| `confirm` | Requires human approval before executing |
-| `dry-run` | Preview only, never executes |
-| `allowlist` | Only runs snippets/tags in the allowlist |
-
 > See [`ai/README.md`](ai/README.md) for full MCP server documentation.
-
----
-
-### 📤 Import & Export
-
-```bash
-# Export all snippets as TOML (default)
-zipet export > my-snippets.toml
-
-# Export as JSON
-zipet export --json > my-snippets.json
-
-# Import from local file
-zipet import ./shared-snippets.toml
-
-# Import from URL
-zipet import https://example.com/team-snippets.toml
-```
-
-Duplicate snippets are automatically detected and skipped during import.
-
----
-
-### 🏷️ Tags & Filtering
-
-Organize with tags and filter instantly:
-
-```bash
-# List all tags with counts
-zipet tags
-
-# Filter by tag
-zipet ls --tags=docker
-
-# In the TUI: press 't' for the tag picker
-```
 
 ---
 
