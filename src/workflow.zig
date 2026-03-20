@@ -8,6 +8,7 @@ const executor = @import("executor.zig");
 const config = @import("config.zig");
 const toml = @import("toml.zig");
 const dag = @import("dag.zig");
+const condition = @import("condition.zig");
 
 pub const OnFail = enum {
     stop,
@@ -170,6 +171,46 @@ pub fn executeSilent(
             });
             continue;
         }
+
+        // Evaluate when clause
+        if (step.when) |when_expr| {
+            var when_vars = condition.VarContext.init(allocator);
+            defer when_vars.deinit();
+
+            for (0..param_keys.len) |pi| {
+                try when_vars.put(param_keys[pi], param_values_in[pi]);
+            }
+            const prev_exit_str = try std.fmt.allocPrint(allocator, "{d}", .{prev_exit});
+            defer allocator.free(prev_exit_str);
+            try when_vars.put("prev_stdout", prev_stdout);
+            try when_vars.put("prev_exit", prev_exit_str);
+            var ctx_iter = var_ctx.iterator();
+            while (ctx_iter.next()) |entry| {
+                try when_vars.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            const should_run = condition.evaluate(allocator, when_expr, &when_vars) catch {
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 0,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, "when evaluation error"),
+                    .skipped = true,
+                });
+                continue;
+            };
+            if (!should_run) {
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 0,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, ""),
+                    .skipped = true,
+                });
+                continue;
+            }
+        }
+
         const raw_cmd = blk: {
             if (step.cmd) |cmd| {
                 break :blk cmd;
@@ -287,7 +328,7 @@ pub fn executeSilent(
             allocator.free(result.stdout);
             allocator.free(result.stderr);
             if (step.retry_delay > 0) {
-                std.time.sleep(@as(u64, step.retry_delay) * std.time.ns_per_s);
+                std.Thread.sleep(@as(u64, step.retry_delay) * std.time.ns_per_s);
             }
             result = try executor.run(allocator, rendered);
         }
@@ -501,6 +542,50 @@ pub fn execute(
             continue;
         }
 
+        // Evaluate when clause
+        if (step.when) |when_expr| {
+            var when_vars = condition.VarContext.init(allocator);
+            defer when_vars.deinit();
+
+            // Add workflow params
+            for (0..workflow.params.len) |pi| {
+                try when_vars.put(param_keys[pi], param_values[pi]);
+            }
+            // Add prev_stdout, prev_exit
+            const prev_exit_str = try std.fmt.allocPrint(allocator, "{d}", .{prev_exit});
+            defer allocator.free(prev_exit_str);
+            try when_vars.put("prev_stdout", prev_stdout);
+            try when_vars.put("prev_exit", prev_exit_str);
+            // Add captured variables from var_ctx
+            var ctx_iter = var_ctx.iterator();
+            while (ctx_iter.next()) |entry| {
+                try when_vars.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            const should_run = condition.evaluate(allocator, when_expr, &when_vars) catch {
+                printOut(allocator, "  \x1b[31m✗ Error evaluating when clause\x1b[0m\n\n", .{});
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 0,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, "when evaluation error"),
+                    .skipped = true,
+                });
+                continue;
+            };
+            if (!should_run) {
+                printOut(allocator, "  \x1b[2m⊘ Skipped (when: {s})\x1b[0m\n\n", .{when_expr});
+                try step_results.append(allocator, .{
+                    .step_name = step.name,
+                    .exit_code = 0,
+                    .stdout = try allocator.dupe(u8, ""),
+                    .stderr = try allocator.dupe(u8, ""),
+                    .skipped = true,
+                });
+                continue; // No capture for skipped steps
+            }
+        }
+
         printOut(allocator, "\x1b[1m[{d}/{d}] {s}\x1b[0m\n", .{ display_idx + 1, workflow.steps.len, step.name });
 
         // Resolve the command for this step
@@ -673,7 +758,7 @@ pub fn execute(
             if (step.retry_delay > 0) {
                 printOut(allocator, "  \x1b[33m⟳ Retry {d}/{d} for \"{s}\" (waiting {d}s...)\x1b[0m\n",
                     .{ attempt, step.retry, step.name, step.retry_delay });
-                std.time.sleep(@as(u64, step.retry_delay) * std.time.ns_per_s);
+                std.Thread.sleep(@as(u64, step.retry_delay) * std.time.ns_per_s);
             } else {
                 printOut(allocator, "  \x1b[33m⟳ Retry {d}/{d} for \"{s}\"\x1b[0m\n",
                     .{ attempt, step.retry, step.name });
