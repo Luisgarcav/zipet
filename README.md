@@ -8,7 +8,7 @@
   <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-cyan?style=flat-square" />
   <img alt="Zig" src="https://img.shields.io/badge/zig-0.15.1-orange?style=flat-square&logo=zig" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square" />
-  <img alt="Platform" src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-blue?style=flat-square" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-linux%20%7C%20macOS-blue?style=flat-square" />
 </p>
 
 ---
@@ -42,7 +42,9 @@ curl -sSL https://raw.githubusercontent.com/Luisgarcav/zipet/main/scripts/instal
 
 The script detects your OS and architecture, downloads the right binary, and places it in `~/.local/bin/`. That's it.
 
-> Supports **Linux** (x86_64 / aarch64), **macOS** (x86_64 / Apple Silicon), and **Windows** (x86_64 / aarch64).
+> Supports **Linux** (x86_64 / aarch64) and **macOS** (x86_64 / Apple Silicon).
+>
+> ⚠️ **Windows** is not supported yet, but it's planned for a future release.
 
 ---
 
