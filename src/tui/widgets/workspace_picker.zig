@@ -45,12 +45,14 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
                     if (self.state.active_workspace) |ws| self.allocator.free(ws);
                     self.state.active_workspace = null;
                     workspace_mod.setActiveWorkspace(self.allocator, self.cfg, null) catch {};
+                    self.snip_store.cfg.active_workspace = null;
                     self.state.message = "\xe2\x9c\x93 Switched to global";
                 } else if (self.list_view.cursor - 1 < self.state.ws_list.len) {
                     const ws = self.state.ws_list[self.list_view.cursor - 1];
                     if (self.state.active_workspace) |old| self.allocator.free(old);
                     self.state.active_workspace = self.allocator.dupe(u8, ws.name) catch null;
                     workspace_mod.setActiveWorkspace(self.allocator, self.cfg, ws.name) catch {};
+                    self.snip_store.cfg.active_workspace = self.state.active_workspace;
                     self.state.message = "\xe2\x9c\x93 Switched workspace";
                 }
                 utils.reloadStore(self.allocator, self.state, self.snip_store);

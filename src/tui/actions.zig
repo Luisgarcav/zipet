@@ -351,6 +351,7 @@ pub fn submitWorkflowForm(allocator: std.mem.Allocator, state: *State, snip_stor
                 .stop => .stop,
                 .@"continue" => .@"continue",
                 .skip_rest => .skip_rest,
+                .ask => .ask,
             },
             .param_overrides = &.{},
         });

@@ -168,7 +168,8 @@ fn cmdAdd(allocator: std.mem.Allocator, args: []const []const u8, snip_store: *s
         allocator.free(result.stdout);
         needs_free = true;
     } else if (args.len > 0) {
-        cmd_text = args[0];
+        cmd_text = try std.mem.join(allocator, " ", args);
+        needs_free = true;
     } else {
         writeOut("Command: ");
         var buf: [2048]u8 = undefined;

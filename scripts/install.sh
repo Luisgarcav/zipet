@@ -49,7 +49,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 info "Downloading zipet for ${TARGET}..."
 if command -v curl &>/dev/null; then
-    curl -sL "$DOWNLOAD_URL" -o "$TMPDIR/zipet.tar.gz" || fail "Download failed. Check if a release exists for ${TARGET}."
+    curl -sfL "$DOWNLOAD_URL" -o "$TMPDIR/zipet.tar.gz" || fail "Download failed. Check if a release exists for ${TARGET}."
 elif command -v wget &>/dev/null; then
     wget -q "$DOWNLOAD_URL" -O "$TMPDIR/zipet.tar.gz" || fail "Download failed. Check if a release exists for ${TARGET}."
 else
