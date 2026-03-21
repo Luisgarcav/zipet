@@ -34,7 +34,6 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
 
     switch (event) {
         .key_press => |key| {
-            // Step 1: Esc/q for both modes
             if (key.matches(vaxis.Key.escape, .{}) or key.matches('q', .{})) {
                 if (self.state.ws_creating) {
                     self.state.ws_creating = false;
@@ -45,7 +44,7 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
                 return ctx.consumeAndRedraw();
             }
 
-            // Step 2: Form-mode event routing
+            // Form-mode input routing
             if (self.state.ws_creating) {
                 const field = self.state.ws_form.activeField();
 
@@ -144,7 +143,6 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
                 return ctx.consumeAndRedraw();
             }
 
-            // Step 3: n key handler in list mode
             if (key.matches('n', .{})) {
                 self.state.ws_creating = true;
                 self.state.ws_form.reset();
@@ -158,7 +156,6 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
     return self.list_view.handleEvent(ctx, event);
 }
 
-// Step 4: handleFormSubmit method
 fn handleFormSubmit(self: *WorkspacePicker) void {
     const form = &self.state.ws_form;
     const name = form.fields[t.WorkspaceFormState.F_NAME].text();
@@ -207,7 +204,6 @@ fn draw(userdata: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxf
     const width: u16 = ctx.max.width orelse 80;
     const height: u16 = ctx.max.height orelse 24;
 
-    // Step 5: Form draw logic
     if (state.ws_creating) {
         return self.drawForm(ctx, accent, width, height);
     }
@@ -258,7 +254,7 @@ fn draw(userdata: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxf
     guard.* = .{ .inner = &self.list_view };
     children[1] = .{ .widget = guard.widget(), .flex = 1 };
 
-    // ── Footer ── (Step 6: updated text)
+    // ── Footer ──
     const footer_w = try ctx.arena.create(vxfw.Text);
     footer_w.* = .{ .text = "  Enter select  n new  Esc/q cancel", .style = t.dim_style };
     children[2] = .{ .widget = footer_w.widget(), .flex = 0 };
