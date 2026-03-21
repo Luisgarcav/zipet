@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-linux
+          - os: macos-latest
+            target: x86_64-macos
+          - os: macos-latest
+            target: aarch64-macos
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+
+      - name: Package
+        run: |
+          tar -czf zipet-${{ matrix.target }}.tar.gz -C zig-out/bin zipet
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zipet-${{ matrix.target }}
+          path: zipet-${{ matrix.target }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            zipet-x86_64-linux/zipet-x86_64-linux.tar.gz
+            zipet-x86_64-macos/zipet-x86_64-macos.tar.gz
+            zipet-aarch64-macos/zipet-aarch64-macos.tar.gz
+          generate_release_notes: true
