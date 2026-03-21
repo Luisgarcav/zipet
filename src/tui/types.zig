@@ -425,6 +425,29 @@ pub const WorkflowRunnerState = struct {
     }
 };
 
+// ── Workspace creation form state ──
+pub const WorkspaceFormState = struct {
+    pub const F_NAME = 0;
+    pub const F_DESC = 1;
+    pub const F_PATH = 2;
+    pub const FIELD_COUNT = 3;
+
+    fields: [FIELD_COUNT]TextField = [_]TextField{.{}} ** FIELD_COUNT,
+    labels: [FIELD_COUNT][]const u8 = .{ "Name", "Description", "Path" },
+    active: usize = 0,
+    error_msg: ?[]const u8 = null,
+
+    pub fn activeField(self: *WorkspaceFormState) *TextField {
+        return &self.fields[self.active];
+    }
+
+    pub fn reset(self: *WorkspaceFormState) void {
+        for (&self.fields) |*f| f.clear();
+        self.active = 0;
+        self.error_msg = null;
+    }
+};
+
 // ── Main state ──
 pub const State = struct {
     mode: Mode = .normal,
@@ -459,6 +482,8 @@ pub const State = struct {
     ws_list: []workspace_mod.Workspace = &.{},
     ws_cursor: usize = 0,
     ws_loaded: bool = false,
+    ws_creating: bool = false,
+    ws_form: WorkspaceFormState = .{},
 
     // Pack browser state
     pack_list: []pack_mod.PackMeta = &.{},
