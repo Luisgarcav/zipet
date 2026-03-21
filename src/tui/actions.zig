@@ -517,6 +517,8 @@ pub fn openWorkspacePicker(allocator: std.mem.Allocator, state: *State, cfg: con
     state.ws_list = try workspace_mod.list(allocator, cfg);
     state.ws_loaded = true;
     state.ws_cursor = 0;
+    state.ws_creating = false;
+    state.ws_form.reset();
 
     if (state.active_workspace) |aw| {
         for (state.ws_list, 0..) |ws, i| {
