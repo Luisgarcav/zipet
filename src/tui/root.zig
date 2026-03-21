@@ -62,7 +62,8 @@ const ZipetRoot = struct {
                     const mode = self.state.mode;
                     // Toggle popup in navigation modes, skip in text input modes
                     if (mode == .search or mode == .command or mode == .form or
-                        mode == .param_input or mode == .workflow_form or mode == .pack_search)
+                        mode == .param_input or mode == .workflow_form or mode == .pack_search or
+                        (mode == .workspace_picker and self.state.ws_creating))
                     {
                         // Let text input handle Space normally
                     } else if (self.state.preview_popup) {
