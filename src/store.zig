@@ -96,31 +96,24 @@ pub const Store = struct {
     }
 
     pub fn loadAll(self: *Store) !void {
-        // Always load global snippets first
-        const global_snippets = try self.cfg.getGlobalSnippetsDir(self.allocator);
-        defer self.allocator.free(global_snippets);
-        try self.loadSnippetsFromDir(global_snippets);
-
-        const global_workflows = try self.cfg.getGlobalWorkflowsDir(self.allocator);
-        defer self.allocator.free(global_workflows);
-        try self.loadWorkflowsFromDir(global_workflows);
-
-        // If a workspace is active, also load workspace-specific snippets/workflows
         if (self.cfg.active_workspace != null) {
+            // Workspace active: load only workspace-specific snippets/workflows
             const ws_snippets = try self.cfg.getSnippetsDir(self.allocator);
             defer self.allocator.free(ws_snippets);
-
-            // Only load if it's a different directory than global
-            if (!std.mem.eql(u8, ws_snippets, global_snippets)) {
-                try self.loadSnippetsFromDir(ws_snippets);
-            }
+            try self.loadSnippetsFromDir(ws_snippets);
 
             const ws_workflows = try self.cfg.getWorkflowsDir(self.allocator);
             defer self.allocator.free(ws_workflows);
+            try self.loadWorkflowsFromDir(ws_workflows);
+        } else {
+            // No workspace: load global snippets/workflows
+            const global_snippets = try self.cfg.getGlobalSnippetsDir(self.allocator);
+            defer self.allocator.free(global_snippets);
+            try self.loadSnippetsFromDir(global_snippets);
 
-            if (!std.mem.eql(u8, ws_workflows, global_workflows)) {
-                try self.loadWorkflowsFromDir(ws_workflows);
-            }
+            const global_workflows = try self.cfg.getGlobalWorkflowsDir(self.allocator);
+            defer self.allocator.free(global_workflows);
+            try self.loadWorkflowsFromDir(global_workflows);
         }
     }
 

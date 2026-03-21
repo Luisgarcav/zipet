@@ -4,6 +4,7 @@ const store = @import("../store.zig");
 const template = @import("../template.zig");
 const history_mod = @import("../history.zig");
 const pack_mod = @import("../pack.zig");
+const workflow_mod = @import("../workflow.zig");
 const t = @import("types.zig");
 const Key = t.Key;
 const State = t.State;
@@ -31,6 +32,8 @@ pub fn yankToClipboard(allocator: std.mem.Allocator, text: []const u8) bool {
 }
 
 pub fn reloadStore(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store) void {
+    // Clear workflow registry first (frees owned workflow data: steps, name, desc, namespace)
+    workflow_mod.clearRegistry(allocator);
     for (snip_store.snippets.items) |s| snip_store.freeSnippet(s);
     snip_store.snippets.clearRetainingCapacity();
     snip_store.loadAll() catch {};

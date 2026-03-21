@@ -1733,7 +1733,57 @@ fn ensureRegistryInit(allocator: std.mem.Allocator) void {
 
 pub fn registerWorkflow(allocator: std.mem.Allocator, wf: Workflow) !void {
     ensureRegistryInit(allocator);
+
+    // If a workflow with this name already exists, free the old entry's owned data
+    if (g_workflows.fetchRemove(wf.name)) |old_kv| {
+        const old = old_kv.value;
+        for (old.steps) |step| {
+            allocator.free(step.name);
+            if (step.cmd) |c| allocator.free(c);
+            if (step.snippet_ref) |r| allocator.free(r);
+            if (step.capture) |c| allocator.free(c);
+            if (step.when) |w| allocator.free(w);
+            for (step.depends_on) |dep| allocator.free(dep);
+            if (step.depends_on.len > 0) allocator.free(step.depends_on);
+        }
+        allocator.free(old.steps);
+        allocator.free(old.name);
+        allocator.free(old.desc);
+        allocator.free(old.namespace);
+        // Note: old.params is shared with store's snippet entry — store frees it
+    }
+
     try g_workflows.put(wf.name, wf);
+}
+
+/// Clear the workflow registry, freeing all owned data. Used before reloading.
+pub fn clearRegistry(allocator: std.mem.Allocator) void {
+    if (!g_workflows_initialized) return;
+
+    var vals: std.ArrayList(Workflow) = .{};
+    defer vals.deinit(allocator);
+    var iter = g_workflows.valueIterator();
+    while (iter.next()) |wf| {
+        vals.append(allocator, wf.*) catch {};
+    }
+    g_workflows.clearRetainingCapacity();
+
+    for (vals.items) |wf| {
+        for (wf.steps) |step| {
+            allocator.free(step.name);
+            if (step.cmd) |c| allocator.free(c);
+            if (step.snippet_ref) |r| allocator.free(r);
+            if (step.capture) |c| allocator.free(c);
+            if (step.when) |w| allocator.free(w);
+            for (step.depends_on) |dep| allocator.free(dep);
+            if (step.depends_on.len > 0) allocator.free(step.depends_on);
+        }
+        allocator.free(wf.steps);
+        allocator.free(wf.name);
+        allocator.free(wf.desc);
+        allocator.free(wf.namespace);
+        // Note: wf.params is shared with store's snippet entry — store frees it
+    }
 }
 
 pub fn getWorkflow(allocator: std.mem.Allocator, name: []const u8) ?*const Workflow {
