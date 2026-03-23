@@ -57,16 +57,16 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
 fn handleInstall(self: *PackPreviewWidget, ctx: *vxfw.EventContext) !void {
     const state = self.state;
     if (state.pack_preview_installed) {
-        state.message = "Pack already installed";
+        utils.setMessageLiteral(self.allocator, state, "Pack already installed");
     } else {
         const result = pack_mod.install(self.allocator, self.cfg, state.pack_preview_name, null, self.snip_store) catch {
-            state.message = "\xe2\x9c\x97 Failed to install pack";
+            utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x97 Failed to install pack");
             return ctx.consumeAndRedraw();
         };
         defer pack_mod.freeInstallResult(self.allocator, result);
 
         if (result.err_msg) |_| {
-            state.message = "\xe2\x9c\x97 Failed to install pack";
+            utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x97 Failed to install pack");
         } else {
             state.pack_preview_installed = true;
             // Also update the browser list entry
@@ -78,7 +78,7 @@ fn handleInstall(self: *PackPreviewWidget, ctx: *vxfw.EventContext) !void {
             }
             self.allocator.free(state.filtered_indices);
             state.filtered_indices = utils.updateFilter(self.allocator, self.snip_store, "") catch &.{};
-            state.message = "\xe2\x9c\x93 Pack installed!";
+            utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x93 Pack installed!");
         }
     }
     return ctx.consumeAndRedraw();

@@ -461,6 +461,7 @@ pub const State = struct {
     running: bool = true,
     filtered_indices: []usize = &.{},
     message: ?[]const u8 = null,
+    message_owned: bool = false,
     pending_g: bool = false,
     tag_list: []const []const u8 = &.{},
     tag_cursor: usize = 0,

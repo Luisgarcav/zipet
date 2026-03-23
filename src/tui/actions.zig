@@ -96,11 +96,12 @@ pub fn submitForm(allocator: std.mem.Allocator, state: *State, snip_store: *stor
     snip_store.add(snippet) catch {};
     allocator.free(state.filtered_indices);
     state.filtered_indices = utils.updateFilterFrecency(allocator, snip_store, state.searchQuery(), null, hist) catch &.{};
-    state.message = switch (values.purpose) {
+    const msg = switch (values.purpose) {
         .add => "✓ Snippet added",
         .edit => "✓ Snippet updated",
         .paste => "✓ Pasted as snippet",
     };
+    utils.setMessageLiteral(allocator, state, msg);
     state.mode = .normal;
     return null;
 }
@@ -437,7 +438,7 @@ pub fn submitWorkflowForm(allocator: std.mem.Allocator, state: *State, snip_stor
     // Update filter and go back
     allocator.free(state.filtered_indices);
     state.filtered_indices = utils.updateFilter(allocator, snip_store, state.searchQuery()) catch &.{};
-    state.message = "✓ Workflow created";
+    utils.setMessageLiteral(allocator, state, "✓ Workflow created");
     state.mode = .normal;
 }
 
@@ -657,7 +658,11 @@ pub fn deleteSelected(allocator: std.mem.Allocator, state: *State, snip_store: *
     if (removed > 0) {
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "✓ Deleted {d} snippets", .{removed}) catch "✓ Deleted";
-        state.message = allocator.dupe(u8, msg) catch "✓ Deleted";
+        if (allocator.dupe(u8, msg)) |owned| {
+            utils.setMessageOwned(allocator, state, owned);
+        } else |_| {
+            utils.setMessageLiteral(allocator, state, "✓ Deleted");
+        }
     }
 }
 

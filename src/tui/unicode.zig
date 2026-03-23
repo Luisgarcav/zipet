@@ -3,8 +3,20 @@ const std = @import("std");
 const vaxis = @import("vaxis");
 
 /// Calculate the display width (in terminal columns) of a UTF-8 string.
-pub fn displayWidth(str: []const u8) u16 {
-    return vaxis.gwidth.gwidth(str, .unicode);
+///
+/// NOTE: We intentionally return `usize` and accumulate per-codepoint widths.
+/// `vaxis.gwidth.gwidth` returns `u16` and can overflow on very long strings.
+pub fn displayWidth(str: []const u8) usize {
+    var cols: usize = 0;
+    var i: usize = 0;
+    while (i < str.len) {
+        const cp_len = std.unicode.utf8ByteSequenceLength(str[i]) catch 1;
+        const end = @min(i + cp_len, str.len);
+        const cp_width: usize = vaxis.gwidth.gwidth(str[i..end], .unicode);
+        cols += cp_width;
+        i = end;
+    }
+    return cols;
 }
 
 /// Truncate a UTF-8 string so its display width fits within `max_cols` terminal columns.
@@ -43,7 +55,7 @@ pub fn nextCodepointEnd(buf: []const u8, pos: usize) usize {
 }
 
 /// Calculate display width of buf[0..byte_pos] (for cursor positioning).
-pub fn displayWidthUpTo(buf: []const u8, byte_pos: usize) u16 {
+pub fn displayWidthUpTo(buf: []const u8, byte_pos: usize) usize {
     const end = @min(byte_pos, buf.len);
     return displayWidth(buf[0..end]);
 }

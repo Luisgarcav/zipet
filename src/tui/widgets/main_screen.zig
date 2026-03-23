@@ -174,7 +174,7 @@ fn handleNormalKey(self: *MainScreen, key: vaxis.Key, ctx: *vxfw.EventContext) !
             actions.openExternalEditor(self.allocator, snip, self.cfg);
             utils.reloadStore(self.allocator, state, self.snip_store);
             self.list_view.item_count = @intCast(state.filtered_indices.len);
-            state.message = "\xe2\x9c\x93 Reloaded after edit";
+            utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x93 Reloaded after edit");
         }
         return ctx.consumeAndRedraw();
     }
@@ -183,7 +183,8 @@ fn handleNormalKey(self: *MainScreen, key: vaxis.Key, ctx: *vxfw.EventContext) !
         if (total > 0 and cursor < total) {
             const si = state.filtered_indices[cursor];
             const snip = &self.snip_store.snippets.items[si];
-            state.message = if (utils.yankToClipboard(self.allocator, snip.cmd)) "\xe2\x9c\x93 Copied to clipboard" else "\xe2\x9c\x97 No clipboard tool found";
+            const msg = if (utils.yankToClipboard(self.allocator, snip.cmd)) "\xe2\x9c\x93 Copied to clipboard" else "\xe2\x9c\x97 No clipboard tool found";
+            utils.setMessageLiteral(self.allocator, state, msg);
         }
         return ctx.consumeAndRedraw();
     }
@@ -195,7 +196,7 @@ fn handleNormalKey(self: *MainScreen, key: vaxis.Key, ctx: *vxfw.EventContext) !
             state.form.paste_cmd_cache = clip_text; // FormScreen will free after populating
             state.mode = .form;
         } else {
-            state.message = "\xe2\x9c\x97 No clipboard content";
+            utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x97 No clipboard content");
         }
         return ctx.consumeAndRedraw();
     }
@@ -208,7 +209,7 @@ fn handleNormalKey(self: *MainScreen, key: vaxis.Key, ctx: *vxfw.EventContext) !
             state.tag_cursor = 0;
             state.mode = .tag_picker;
         } else {
-            state.message = "No tags found";
+            utils.setMessageLiteral(self.allocator, state, "No tags found");
         }
         return ctx.consumeAndRedraw();
     }
@@ -228,14 +229,18 @@ fn handleNormalKey(self: *MainScreen, key: vaxis.Key, ctx: *vxfw.EventContext) !
     if (key.matches('X', .{}) or key.matches('x', .{ .shift = true })) {
         if (state.selectionCount() > 0) {
             state.clearSelection();
-            state.message = "Selection cleared";
+            utils.setMessageLiteral(self.allocator, state, "Selection cleared");
         } else {
             for (state.filtered_indices) |si| {
                 state.selected_set.put(si, {}) catch {};
             }
             var buf: [64]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "{d} selected", .{state.filtered_indices.len}) catch "Selected all";
-            state.message = self.allocator.dupe(u8, msg) catch "Selected all";
+            if (self.allocator.dupe(u8, msg)) |owned| {
+                utils.setMessageOwned(self.allocator, state, owned);
+            } else |_| {
+                utils.setMessageLiteral(self.allocator, state, "Selected all");
+            }
         }
         return ctx.consumeAndRedraw();
     }
@@ -244,7 +249,7 @@ fn handleNormalKey(self: *MainScreen, key: vaxis.Key, ctx: *vxfw.EventContext) !
         if (state.selectionCount() > 0) {
             try actions.executeSelectedParallel(self.allocator, state, self.snip_store);
         } else {
-            state.message = "No snippets selected (use x to select)";
+            utils.setMessageLiteral(self.allocator, state, "No snippets selected (use x to select)");
         }
         return ctx.consumeAndRedraw();
     }
@@ -253,7 +258,7 @@ fn handleNormalKey(self: *MainScreen, key: vaxis.Key, ctx: *vxfw.EventContext) !
         if (state.selectionCount() > 0) {
             state.mode = .confirm_delete_multi;
         } else {
-            state.message = "No snippets selected (use x to select)";
+            utils.setMessageLiteral(self.allocator, state, "No snippets selected (use x to select)");
         }
         return ctx.consumeAndRedraw();
     }
@@ -345,7 +350,7 @@ fn handleConfirmDeleteKey(self: *MainScreen, key: vaxis.Key) void {
         if (self.list_view.cursor >= state.filtered_indices.len and state.filtered_indices.len > 0)
             self.list_view.cursor = @intCast(state.filtered_indices.len - 1);
         state.cursor = self.list_view.cursor;
-        state.message = "Snippet deleted";
+        utils.setMessageLiteral(self.allocator, state, "Snippet deleted");
         state.mode = .normal;
     } else {
         state.mode = .normal;
@@ -382,7 +387,7 @@ fn executeCommand(self: *MainScreen) void {
             state.tag_cursor = 0;
             state.mode = .tag_picker;
         } else {
-            state.message = "No tags found";
+            utils.setMessageLiteral(self.allocator, state, "No tags found");
         }
     } else if (eql(u8, cmd, "export")) {
         actions.buildExportOutput(self.allocator, state, self.snip_store);
@@ -396,7 +401,7 @@ fn executeCommand(self: *MainScreen) void {
         state.mode = .output_view;
     } else if (eql(u8, cmd, "w")) {
         actions.saveAll(self.allocator, self.snip_store);
-        state.message = "All saved";
+        utils.setMessageLiteral(self.allocator, state, "All saved");
     } else if (eql(u8, cmd, "wq")) {
         actions.saveAll(self.allocator, self.snip_store);
         state.running = false;
@@ -765,10 +770,10 @@ fn draw(userdata: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxf
                     const spaces = try ctx.arena.alloc(u8, gap_val);
                     @memset(spaces, ' ');
                     const line = try std.fmt.allocPrint(ctx.arena, "{s}{s}{s}", .{ footer_keys, spaces, msg });
-                    state.message = null;
+                    utils.clearMessage(self.allocator, state);
                     break :blk line;
                 } else {
-                    state.message = null;
+                    utils.clearMessage(self.allocator, state);
                     break :blk footer_keys;
                 }
             } else footer_keys;

@@ -61,7 +61,7 @@ fn handleEvent(userdata: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event)
                 self.state.search_len = 0;
                 refilter(self);
                 self.state.mode = .normal;
-                self.state.message = "Tag filter cleared";
+                utils.setMessageLiteral(self.allocator, self.state, "Tag filter cleared");
                 return ctx.consumeAndRedraw();
             }
         },

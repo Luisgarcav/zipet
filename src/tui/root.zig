@@ -358,6 +358,7 @@ pub fn run(allocator: std.mem.Allocator, snip_store: *store.Store, cfg: config.C
     state.output = t.OutputBuf.init(allocator);
     defer state.output.deinit();
     defer if (state.output_title) |tt| allocator.free(tt);
+    defer utils.clearMessage(allocator, &state);
     state.initSelectedSet(allocator);
     defer state.deinitSelectedSet();
     state.active_workspace = workspace_mod.getActiveWorkspace(allocator, cfg) catch null;

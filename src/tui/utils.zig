@@ -31,6 +31,26 @@ pub fn yankToClipboard(allocator: std.mem.Allocator, text: []const u8) bool {
     return false;
 }
 
+pub fn clearMessage(allocator: std.mem.Allocator, state: *State) void {
+    if (state.message_owned) {
+        if (state.message) |msg| allocator.free(msg);
+    }
+    state.message = null;
+    state.message_owned = false;
+}
+
+pub fn setMessageLiteral(allocator: std.mem.Allocator, state: *State, msg: []const u8) void {
+    clearMessage(allocator, state);
+    state.message = msg;
+    state.message_owned = false;
+}
+
+pub fn setMessageOwned(allocator: std.mem.Allocator, state: *State, msg: []const u8) void {
+    clearMessage(allocator, state);
+    state.message = msg;
+    state.message_owned = true;
+}
+
 pub fn reloadStore(allocator: std.mem.Allocator, state: *State, snip_store: *store.Store) void {
     // Clear workflow registry first (frees owned workflow data: steps, name, desc, namespace)
     workflow_mod.clearRegistry(allocator);

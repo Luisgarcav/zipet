@@ -94,21 +94,21 @@ fn handlePackBrowserKey(self: *PackBrowserWidget, key: vaxis.Key, ctx: *vxfw.Eve
             const real_idx = packRealIndex(state, self.list_view.cursor);
             const p = &state.pack_list[real_idx];
             if (p.installed) {
-                state.message = "Pack already installed";
+                utils.setMessageLiteral(self.allocator, state, "Pack already installed");
             } else {
                 const result = pack_mod.install(self.allocator, self.cfg, p.name, null, self.snip_store) catch {
-                    state.message = "\xe2\x9c\x97 Failed to install pack";
+                    utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x97 Failed to install pack");
                     return ctx.consumeAndRedraw();
                 };
                 defer pack_mod.freeInstallResult(self.allocator, result);
 
                 if (result.err_msg) |_| {
-                    state.message = "\xe2\x9c\x97 Failed to install pack";
+                    utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x97 Failed to install pack");
                 } else {
                     p.installed = true;
                     self.allocator.free(state.filtered_indices);
                     state.filtered_indices = utils.updateFilter(self.allocator, self.snip_store, "") catch &.{};
-                    state.message = "\xe2\x9c\x93 Pack installed!";
+                    utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x93 Pack installed!");
                 }
             }
         }
@@ -120,17 +120,17 @@ fn handlePackBrowserKey(self: *PackBrowserWidget, key: vaxis.Key, ctx: *vxfw.Eve
             const real_idx = packRealIndex(state, self.list_view.cursor);
             const p = &state.pack_list[real_idx];
             if (!p.installed) {
-                state.message = "Pack not installed";
+                utils.setMessageLiteral(self.allocator, state, "Pack not installed");
             } else {
                 const removed = pack_mod.uninstall(self.allocator, self.cfg, p.name, self.snip_store) catch {
-                    state.message = "\xe2\x9c\x97 Failed to uninstall";
+                    utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x97 Failed to uninstall");
                     return ctx.consumeAndRedraw();
                 };
                 _ = removed;
                 p.installed = false;
                 self.allocator.free(state.filtered_indices);
                 state.filtered_indices = utils.updateFilter(self.allocator, self.snip_store, "") catch &.{};
-                state.message = "\xe2\x9c\x93 Pack uninstalled";
+                utils.setMessageLiteral(self.allocator, state, "\xe2\x9c\x93 Pack uninstalled");
             }
         }
         return ctx.consumeAndRedraw();
