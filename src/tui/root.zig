@@ -189,8 +189,10 @@ const ZipetRoot = struct {
         const raw_h = ctx.max.height orelse 24;
         const max_w: u16 = @min(raw_w, 512);
         const max_h: u16 = @min(raw_h, 256);
+        const min_w: u16 = @min(ctx.min.width, max_w);
+        const min_h: u16 = @min(ctx.min.height, max_h);
         const safe_ctx = ctx.withConstraints(
-            .{ .width = max_w, .height = max_h },
+            .{ .width = min_w, .height = min_h },
             .{ .width = max_w, .height = max_h },
         );
 
