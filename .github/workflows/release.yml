@@ -15,10 +15,13 @@ jobs:
         include:
           - os: ubuntu-latest
             release_name: x86_64-linux
-          - os: macos-13
-            release_name: x86_64-macos
-          - os: macos-14
+            zig_target: ""
+          - os: macos-latest
             release_name: aarch64-macos
+            zig_target: ""
+          - os: macos-latest
+            release_name: x86_64-macos
+            zig_target: x86_64-macos
 
     runs-on: ${{ matrix.os }}
 
@@ -36,8 +39,13 @@ jobs:
           zig version
           zig env
 
-      - name: Build (native runner target)
-        run: zig build -Doptimize=ReleaseSafe
+      - name: Build (native runner target, optional macOS cross build)
+        run: |
+          if [ -n "${{ matrix.zig_target }}" ]; then
+            zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig_target }}
+          else
+            zig build -Doptimize=ReleaseSafe
+          fi
 
       - name: Package
         run: |
