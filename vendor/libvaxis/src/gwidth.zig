@@ -49,7 +49,7 @@ fn eawToWidth(cp: u21, eaw: uucode.types.EastAsianWidth) i16 {
 pub fn gwidth(str: []const u8, method: Method) u16 {
     switch (method) {
         .unicode => {
-            var total: u16 = 0;
+            var total: usize = 0;
             var grapheme_iter = uucode.grapheme.Iterator(uucode.utf8.Iterator).init(.init(str));
 
             var grapheme_start: usize = 0;
@@ -113,17 +113,17 @@ pub fn gwidth(str: []const u8, method: Method) u16 {
                         width = @max(2, width);
                     }
 
-                    total += @max(0, width);
+                    total += @as(usize, @intCast(@max(0, width)));
 
                     grapheme_start = grapheme_end;
                 }
                 prev_break = result.is_break;
             }
 
-            return total;
+            return @intCast(@min(total, std.math.maxInt(u16)));
         },
         .wcwidth => {
-            var total: u16 = 0;
+            var total: usize = 0;
             var iter = uucode.utf8.Iterator.init(str);
             while (iter.next()) |cp| {
                 const w: i16 = switch (cp) {
@@ -134,17 +134,17 @@ pub fn gwidth(str: []const u8, method: Method) u16 {
                         break :blk eawToWidth(cp, eaw);
                     },
                 };
-                total += @intCast(@max(0, w));
+                total += @as(usize, @intCast(@max(0, w)));
             }
-            return total;
+            return @intCast(@min(total, std.math.maxInt(u16)));
         },
         .no_zwj => {
             var iter = std.mem.splitSequence(u8, str, "\u{200D}");
-            var result: u16 = 0;
+            var result: usize = 0;
             while (iter.next()) |s| {
                 result += gwidth(s, .unicode);
             }
-            return result;
+            return @intCast(@min(result, std.math.maxInt(u16)));
         },
     }
 }
