@@ -14,11 +14,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-linux
-          - os: macos-latest
-            target: x86_64-macos
-          - os: macos-latest
-            target: aarch64-macos
+            release_name: x86_64-linux
+          - os: macos-13
+            release_name: x86_64-macos
+          - os: macos-14
+            release_name: aarch64-macos
 
     runs-on: ${{ matrix.os }}
 
@@ -30,18 +30,24 @@ jobs:
         with:
           version: 0.15.1
 
-      - name: Build
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+      - name: Debug runner info
+        run: |
+          uname -a
+          zig version
+          zig env
+
+      - name: Build (native runner target)
+        run: zig build -Doptimize=ReleaseSafe
 
       - name: Package
         run: |
-          tar -czf zipet-${{ matrix.target }}.tar.gz -C zig-out/bin zipet
+          tar -czf zipet-${{ matrix.release_name }}.tar.gz -C zig-out/bin zipet
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zipet-${{ matrix.target }}
-          path: zipet-${{ matrix.target }}.tar.gz
+          name: zipet-${{ matrix.release_name }}
+          path: zipet-${{ matrix.release_name }}.tar.gz
 
   release:
     needs: build
