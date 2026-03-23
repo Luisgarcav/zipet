@@ -2,7 +2,7 @@
 /// Downloads the latest release from GitHub and replaces the current binary.
 const std = @import("std");
 
-pub const version = "0.1.0";
+pub const version = @import("build_options").version;
 const repo = "Luisgarcav/zipet";
 
 pub const UpdateResult = struct {

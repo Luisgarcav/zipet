@@ -1,6 +1,6 @@
 .{
     .name = .zipet,
-    .version = "0.1.0",
+    .version = "1.2.1",
     .fingerprint = 0x287df56dc7f801dd,
     .minimum_zig_version = "0.15.1",
     .paths = .{
