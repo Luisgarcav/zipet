@@ -183,27 +183,36 @@ const ZipetRoot = struct {
     fn draw(userdata: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxfw.Surface {
         const self: *ZipetRoot = @ptrCast(@alignCast(userdata));
 
+        // Some environments (CI/pseudo-TTY) may report absurd terminal sizes.
+        // Clamp the root constraints to keep downstream u16 math in widgets safe.
+        const raw_w = ctx.max.width orelse 80;
+        const raw_h = ctx.max.height orelse 24;
+        const max_w: u16 = @min(raw_w, 512);
+        const max_h: u16 = @min(raw_h, 256);
+        const safe_ctx = ctx.withConstraints(
+            .{ .width = max_w, .height = max_h },
+            .{ .width = max_w, .height = max_h },
+        );
+
         // Draw the base screen
         const base = switch (self.state.mode) {
-            .output_view => try self.output_view.widget().draw(ctx),
-            .help => try self.help_screen.widget().draw(ctx),
-            .form => try self.form_screen.widget().draw(ctx),
-            .param_input => try self.param_input.widget().draw(ctx),
-            .workflow_form => try self.workflow_form.widget().draw(ctx),
-            .pack_browser, .pack_search => try self.pack_browser.widget().draw(ctx),
-            .pack_preview => try self.pack_preview.widget().draw(ctx),
-            .tag_picker => try self.tag_picker.widget().draw(ctx),
-            .workspace_picker => try self.workspace_picker.widget().draw(ctx),
-            .normal, .search, .command, .confirm_delete, .confirm_delete_multi, .info => try self.main_screen.widget().draw(ctx),
-            .workflow_runner => try self.workflow_runner.widget().draw(ctx),
+            .output_view => try self.output_view.widget().draw(safe_ctx),
+            .help => try self.help_screen.widget().draw(safe_ctx),
+            .form => try self.form_screen.widget().draw(safe_ctx),
+            .param_input => try self.param_input.widget().draw(safe_ctx),
+            .workflow_form => try self.workflow_form.widget().draw(safe_ctx),
+            .pack_browser, .pack_search => try self.pack_browser.widget().draw(safe_ctx),
+            .pack_preview => try self.pack_preview.widget().draw(safe_ctx),
+            .tag_picker => try self.tag_picker.widget().draw(safe_ctx),
+            .workspace_picker => try self.workspace_picker.widget().draw(safe_ctx),
+            .normal, .search, .command, .confirm_delete, .confirm_delete_multi, .info => try self.main_screen.widget().draw(safe_ctx),
+            .workflow_runner => try self.workflow_runner.widget().draw(safe_ctx),
         };
 
         // If preview popup is active, composite it over the base
         if (self.state.preview_popup) {
             if (getPreviewContent(self)) |info| {
-                const popup = try drawPreviewPopup(self, ctx, info);
-                const max_w = ctx.max.width orelse 80;
-                const max_h = ctx.max.height orelse 24;
+                const popup = try drawPreviewPopup(self, safe_ctx, info);
 
                 // Center the popup
                 const popup_w = popup.size.width;
